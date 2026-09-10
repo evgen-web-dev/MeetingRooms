@@ -1,0 +1,30 @@
+{
+  "name": "Meeting Rooms Sandbox",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "containerdev",
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "editor.formatOnSave": true
+      }
+    }
+  },
+
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/containerdev/.claude",
+    "DISABLE_AUTOUPDATER": "1",
+    "ASPNETCORE_ENVIRONMENT": "Development",
+    "ASPNETCORE_URLS": "http://+:5000"
+  },
+
+  "remoteEnv": {
+    "SSH_AUTH_SOCK": ""
+  },
+
+  "forwardPorts": [5000, 5173],
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
+  "waitFor": "postStartCommand"
+}

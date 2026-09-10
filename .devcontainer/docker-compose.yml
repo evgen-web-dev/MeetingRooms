@@ -1,0 +1,55 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TZ: ${TZ:-Etc/UTC}
+        NODE_VERSION: "24.21.0"
+        # First build: "stable". After building, run `claude --version` inside the
+        # container and replace this with that exact X.Y.Z for reproducible rebuilds.
+        CLAUDE_CODE_VERSION: "2.1.236"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      ConnectionStrings__DefaultConnection: "Server=db;Database=MeetingRooms;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
+    volumes:
+      - ..:/workspace:cached
+      - claude-code-config:/home/containerdev/.claude
+      - claude-code-bashhistory:/commandhistory
+      - nuget-packages:/home/containerdev/.nuget/packages
+    command: sleep infinity
+    depends_on:
+      - db
+      # To make the app container wait until SQL Server actually accepts connections
+      # (not just "container started"), replace the two lines above with:
+      #   db:
+      #     condition: service_healthy
+      # Trade-off: the containerdev container won't OPEN until the DB is healthy, and a broken
+      # healthcheck then blocks your IDE. Plain depends_on keeps the IDE resilient;
+      # you just wait a few seconds (watch `docker ps` for "healthy") before migrating.
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64      # DELETE on an Intel Mac
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .devcontainer/.env}
+      MSSQL_PID: "Developer"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      # $$ escapes the $ so compose passes it literally; the db container's own shell
+      # expands $MSSQL_SA_PASSWORD from its environment.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s        # amd64 emulation boots slowly - give it room
+
+volumes:
+  claude-code-config:
+  claude-code-bashhistory:
+  nuget-packages:
+  mssql-data:

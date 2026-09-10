@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git remote:*)",
+      "Bash(gh:*)",
+      "Bash(az:*)",
+      "Bash(sudo:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Edit(./.git/**)",
+      "Edit(./.devcontainer/**)",
+      "Edit(./.claude/**)"
+    ],
+    "ask": [
+      "Bash(dotnet add:*)",
+      "Bash(dotnet tool:*)",
+      "Bash(dotnet nuget:*)",
+      "Bash(npm install:*)",
+      "Bash(npx:*)",
+      "Bash(npm exec:*)",
+      "Edit(**/*.csproj)",
+      "Edit(**/Directory.Build.props)",
+      "Edit(**/Directory.Build.targets)",
+      "Edit(**/Directory.Packages.props)",
+      "Edit(**/nuget.config)",
+      "Edit(**/package.json)"
+    ],
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(dotnet test:*)",
+      "Bash(dotnet run:*)",
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet ef:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(ls:*)",
+      "Bash(rg:*)"
+    ]
+  }
+}

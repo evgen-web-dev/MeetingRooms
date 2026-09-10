@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Meeting Rooms</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 40rem;
+            margin: 4rem auto;
+            padding: 0 1rem;
+        }
+
+        pre {
+            background: #f4f4f5;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+        }
+
+        .err {
+            color: #b91c1c;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Meeting Rooms</h1>
+    <p>Placeholder frontend. Replaced by the React build later.</p>
+
+    <h2>Backend health</h2>
+    <pre id="out">checking…</pre>
+
+    <script>
+        // Same-origin call: proves static files and the API are served by one app.
+        fetch('/health')
+            .then(r => {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(d => { document.getElementById('out').textContent = JSON.stringify(d, null, 2); })
+            .catch(e => {
+                const el = document.getElementById('out');
+                el.textContent = 'Health check failed: ' + e.message;
+                el.className = 'err';
+            });
+    </script>
+</body>
+
+</html>
