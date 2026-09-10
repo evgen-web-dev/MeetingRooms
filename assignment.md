@@ -18,7 +18,7 @@ Steps:
 
    * Implement user authentication with a role-based model.
    * Regular user: can view resources and their schedules, and book available slots.
-   * can additionally create, edit, and remove resources, and view all bookings across users.
+   * Admin: can additionally create, edit, and remove resources, and view all bookings across users.
 
 4. Resources and scheduling
 

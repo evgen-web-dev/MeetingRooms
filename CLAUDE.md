@@ -28,3 +28,13 @@ Any booking implementation must name its concurrency mechanism explicitly —
 unique index plus violation handling, rowversion, or explicit locking — and
 explain what happens when two requests race. "It probably won't happen" is not
 an answer.
+
+## Planning
+Phase docs live in `docs/phases/` and follow `docs/phases/_template.md`.
+Phase docs are written and approved before implementation starts.
+
+## Reference code
+`docs/reference/` holds code from a previous project of mine, for reference only.
+It is gitignored and not part of this solution — never edit it, never add it to
+a project, never assume it compiles here. It targets PostgreSQL; this project is
+SQL Server. When reusing a pattern from it, adapt it and tell me what changed.

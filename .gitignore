@@ -489,6 +489,9 @@ $RECYCLE.BIN/
 node_modules/
 src/backend/MeetingRooms.Api/wwwroot/assets/
 
+# Reference code from a prior project - read by Claude, never shipped
+docs/reference/
+
 # Local
 .DS_Store
 # ================= additions =================
