@@ -11,7 +11,7 @@
 ## What you must NOT do
 - No git commits, pushes, tags, or remote changes. I do all git operations myself.
 - No `gh`, no Azure CLI, no deployment, no secrets.
-- No adding NuGet or npm packages without asking first — including by editing a
+- No adding NuGet or npm packages without asking first - including by editing a
   .csproj, Directory.Packages.props, or package.json directly.
 - No editing `.devcontainer/`, `.claude/`, or anything under `.git/`.
 
@@ -24,17 +24,38 @@
 
 ## Non-negotiable correctness requirement
 A time slot must never be double-booked, including under concurrent requests.
-Any booking implementation must name its concurrency mechanism explicitly —
-unique index plus violation handling, rowversion, or explicit locking — and
+Any booking implementation must name its concurrency mechanism explicitly -
+unique index plus violation handling, rowversion, or explicit locking - and
 explain what happens when two requests race. "It probably won't happen" is not
 an answer.
 
 ## Planning
-Phase docs live in `docs/phases/` and follow `docs/phases/_template.md`.
-Phase docs are written and approved before implementation starts.
+Work proceeds in phases. Each phase is planned and approved before
+implementation starts. When a phase is done, we record what actually happened
+before moving on.
 
-## Reference code
-`docs/reference/` holds code from a previous project of mine, for reference only.
-It is gitignored and not part of this solution — never edit it, never add it to
-a project, never assume it compiles here. It targets PostgreSQL; this project is
-SQL Server. When reusing a pattern from it, adapt it and tell me what changed.
+## Project docs
+- `assignment.md` - the requirements. Authoritative. Nothing overrides it.
+- `decisions.md` - decisions I have already made. Binding. If you think one is
+  wrong, say so and stop - don't work around it silently.
+- `docs/reference/` - a previous project of mine, plus notes on it. Gitignored,
+  not part of this solution. Never edit it, never add it to a project, never
+  assume it compiles here.
+
+## How to use docs/reference/
+Start with `general-ideas.md` - it indexes the patterns and points at the source
+files that implement them. Read it so your suggestions match conventions I
+already know, and open the cited files when you need the real implementation.
+
+Nothing in there is a requirement. Do not adopt a pattern because it's there -
+each one has to justify itself for *this* assignment, which is smaller and on a
+four-day deadline. That project had no deadline; several of its choices are the
+wrong trade here. When a pattern is more machinery than this project needs, say
+so instead of building it. When you do reuse something, say what you changed.
+
+The reference code targets PostgreSQL; this project is SQL Server. Exception
+codes, type mappings, index features, and concurrency primitives differ - never
+carry those across unchanged.
+
+That project did not solve double-booking under concurrency. Everything in the
+reference is scaffolding around that problem, not a solution to it.
