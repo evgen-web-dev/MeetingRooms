@@ -1,0 +1,24 @@
+using MeetingRooms.Application.Errors;
+
+namespace MeetingRooms.Api.Errors;
+
+/// <summary>
+/// The single place an Application error code becomes an HTTP status code.
+/// Each feature phase adds its own rows here; nothing else in the API decides status.
+/// </summary>
+public static class ErrorStatusCodeMapper
+{
+    private static readonly IReadOnlyDictionary<string, int> StatusCodesMap = new Dictionary<string, int>
+    {
+        [GenericErrorCodes.UnexpectedError] = StatusCodes.Status500InternalServerError
+    };
+
+    /// <summary>
+    /// Unmapped codes fall back to 500 on purpose: a missing row is a bug, and a bug
+    /// should be loud rather than quietly presenting itself to the client as a 400.
+    /// </summary>
+    public static int GetStatusCodeForError(string error, int fallbackStatusCode = StatusCodes.Status500InternalServerError) =>
+        StatusCodesMap.TryGetValue(error, out var statusCode)
+            ? statusCode
+            : fallbackStatusCode;
+}

@@ -7,13 +7,13 @@
       "Bash(gh:*)",
       "Bash(az:*)",
       "Bash(sudo:*)",
-      "Bash(curl:*)",
-      "Bash(wget:*)",
       "Edit(./.git/**)",
       "Edit(./.devcontainer/**)",
       "Edit(./.claude/**)"
     ],
     "ask": [
+      "Bash(curl:*)",
+      "Bash(wget:*)",
       "Bash(dotnet add:*)",
       "Bash(dotnet tool:*)",
       "Bash(dotnet nuget:*)",

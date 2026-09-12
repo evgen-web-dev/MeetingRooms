@@ -18,10 +18,24 @@
             padding: 1rem;
             border-radius: 6px;
             overflow-x: auto;
+            white-space: pre-wrap;
+        }
+
+        .ok {
+            color: #15803d;
+        }
+
+        .warn {
+            color: #b45309;
         }
 
         .err {
             color: #b91c1c;
+        }
+
+        .legend {
+            font-size: 0.875rem;
+            color: #52525b;
         }
     </style>
 </head>
@@ -31,21 +45,61 @@
     <p>Placeholder frontend. Replaced by the React build later.</p>
 
     <h2>Backend health</h2>
-    <pre id="out">checking…</pre>
+    <pre id="health">checking…</pre>
+
+    <h2>Realtime transport</h2>
+    <pre id="realtime">checking…</pre>
+    <p class="legend">
+        Negotiate has three outcomes, and they need different fixes:
+        <strong>Azure SignalR</strong> is the deployed target;
+        <strong>in-process</strong> means the connection string was not read at all;
+        <strong>not connected</strong> means it was read but the service is unreachable.
+    </p>
 
     <script>
+        const show = (id, text, cls = '') => {
+            const el = document.getElementById(id);
+            el.textContent = text;
+            el.className = cls;
+        };
+
         // Same-origin call: proves static files and the API are served by one app.
         fetch('/health')
             .then(r => {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             })
-            .then(d => { document.getElementById('out').textContent = JSON.stringify(d, null, 2); })
-            .catch(e => {
-                const el = document.getElementById('out');
-                el.textContent = 'Health check failed: ' + e.message;
-                el.className = 'err';
-            });
+            .then(d => show('health', JSON.stringify(d, null, 2), 'ok'))
+            .catch(e => show('health', 'Health check failed: ' + e.message, 'err'));
+
+        // Negotiate is the cheapest proof that SignalR is wired, and the only one
+        // available before a real client connects. It never opens a connection.
+        fetch('/hubs/schedule/negotiate?negotiateVersion=1', { method: 'POST' })
+            .then(async r => {
+                const body = await r.text();
+                if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + body.slice(0, 200));
+                return JSON.parse(body);
+            })
+            .then(d => {
+                if (d.url) {
+                    // Azure SignalR redirects the client to the service. The access token
+                    // is deliberately not rendered - only whether one came back.
+                    show('realtime',
+                        'Azure SignalR\n'
+                        + 'endpoint: ' + new URL(d.url).host + '\n'
+                        + 'accessToken: ' + (d.accessToken ? 'present' : 'MISSING'),
+                        d.accessToken ? 'ok' : 'err');
+                } else if (d.connectionId) {
+                    const transports = (d.availableTransports || []).map(t => t.transport).join(', ');
+                    show('realtime',
+                        'In-process SignalR — no Azure connection string was read\n'
+                        + 'transports: ' + transports,
+                        'warn');
+                } else {
+                    show('realtime', 'Unrecognised negotiate response:\n' + JSON.stringify(d, null, 2), 'err');
+                }
+            })
+            .catch(e => show('realtime', 'Negotiate failed: ' + e.message, 'err'));
     </script>
 </body>
 

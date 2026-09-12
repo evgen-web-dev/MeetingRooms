@@ -8,6 +8,13 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Azure.SignalR" Version="1.33.1" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.17.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeetingRooms.Application\MeetingRooms.Application.csproj" />
+    <ProjectReference Include="..\MeetingRooms.Infrastructure\MeetingRooms.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
