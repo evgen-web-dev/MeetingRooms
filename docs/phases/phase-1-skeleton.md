@@ -169,5 +169,99 @@ Locally, before the merge:
 
 ## Outcome
 
-<!-- Filled in after the deploy, before phase 2 starts: what actually happened, what
-     deviated, what got deferred. This is what the next session reads first. -->
+**Completed and deployed 2026-09-13.** All thirteen tasks done, every Done-when item
+closed, including the three that could only close after the deploy.
+
+### Verified
+
+Locally, from a clean rebuild of the committed tree: zero-warning build; the reference
+graph exactly as specified (Domain 0 references, Application 1, Infrastructure 2, Api 2);
+`/health` unchanged in shape; `/openapi/v1.json` containing exactly one path and one
+schema; `/api/nope` a 404 `ProblemDetails`; negotiate returning `connectionId`; an
+unhandled exception producing 500 + `errorDetails: ["UnexpectedError"]` with the full
+stack logged and nothing leaked into the body.
+
+On the deployed app: `/health`, `/scalar/` and `/openapi/v1.json` all load, `/health` was
+exercised through Scalar itself, and negotiate returns an Azure SignalR endpoint plus an
+access token — `signalr-meetingrooms.service.signalr.net`. **Azure SignalR is wired**,
+which was the whole reason this phase carried an otherwise-empty hub.
+
+### Deviations from the plan
+
+1. **`ProblemDetails` is built by MVC's `ProblemDetailsFactory`.** The plan had us port
+   three files from the reference; one of them reproduced a status-code-to-RFC-URI table
+   the framework already owns. `ProblemDetailsTypeStatusCodeMapper` and
+   `ErrorCodesProblemDetailsFactory` were therefore not created, and a small
+   `Api/Errors/ProblemDetailsExtensions.cs` holds the `errorDetails` key so the controller
+   path and the exception handler cannot drift. Recorded in `docs/decisions.md`.
+2. **`OperationResult` gained two guarantees beyond the plan:** reading `Value` on a
+   failed result throws instead of returning `default!`, and `Failure()` rejects an empty
+   error list. The second is what makes `Errors[0]` safe at the mapping site.
+3. **The local HTTP port is 5000, not the 5248 written above.** `devcontainer.json`
+   forwards 5000 and 5173 and nothing forwarded 5248, so the documented local URL was
+   unreachable from a browser outside the container. 5173 is Vite's default, so 5000 was
+   plainly the intended API port. References to 5248 earlier in this document are
+   superseded.
+4. **`HealthResponse` lives in `Api/DTOs/`**, and `TimeProvider.System` is registered in
+   the composition root with `HealthController` as its first consumer, so the
+   registration is not dead code.
+5. **Scalar's path is `/scalar/`.** A bare `/scalar` returns a 302 to it.
+
+### What the phase proved, beyond its checklist
+
+- **Both package risks were unfounded, for different reasons.** `Scalar.AspNetCore`
+  2.17.3 ships a real `net10.0` target *and* self-hosts its JavaScript bundle at
+  `/scalar/scalar.js` rather than loading it from a CDN — which is why the reference UI
+  renders inside this firewalled container at all. `Microsoft.Azure.SignalR` 1.33.1 has
+  no `net10.0` target, resolves its `net8.0` asset cleanly, and produces no `NU1701`.
+- **Route precedence was tested, not assumed.** A temporary `/api/ping` controller
+  confirmed that a literal controller route outranks the `/api/{**slug}` catch-all. Had
+  that been wrong, every endpoint added in phases 3-7 would have been shadowed.
+- **Development does not leak stack traces.** ASP.NET inserts its developer exception
+  page automatically in Development; because `UseExceptionHandler()` is the first
+  middleware *we* register, ours sits inside it and catches first. Confirmed by
+  identical response bodies in both environments.
+
+### Learned, and not anticipated by this document
+
+- **Negotiate has three outcomes, not the two in Done-when.** Alongside "Azure `url` +
+  `accessToken`" and "`connectionId`, meaning the connection string was never read",
+  there is a plain-text `500 "Azure SignalR Service is not connected yet"`, meaning the
+  string *was* read but no server connection exists. The second and third look alike from
+  a browser and have unrelated causes.
+- **That third outcome is also the normal cold-start window.** The first page load after
+  the deploy showed it; every subsequent load succeeded. The SDK opens server connections
+  to the service at startup and refuses negotiate until one is established. A single 500
+  immediately after a deploy or restart is expected; only a persistent one is a fault.
+  The README's diagnosis table says so.
+- **Azure SignalR negotiate cannot be exercised offline.** A local probe with a
+  syntactically valid but unreachable connection string proves the configuration key is
+  read and the Azure branch activates - which was the failure mode most likely to go
+  unnoticed - but it can never prove negotiate succeeds. Only a deploy does that.
+
+### Carried into later phases
+
+- **Phase 6:** the real SignalR client must tolerate a failed *initial* negotiate after a
+  deploy or restart. `withAutomaticReconnect()` covers reconnection, not the first
+  `start()`, so that needs an explicit retry.
+- **Phase 3:** `Microsoft.Azure.SignalR` pulled in eleven transitive packages, among them
+  `Microsoft.IdentityModel.Abstractions` 6.35.0. JWT bearer authentication brings a much
+  newer `Microsoft.IdentityModel` line; an `NU1605` downgrade warning there originates
+  here.
+- **`docs/devcontainer-changes.md` has two entries still to be written:** a contingency
+  for allowlisting `signalr-meetingrooms.service.signalr.net`, and a correction to B5.
+  B5 currently states that `init-firewall.sh` is safe to run repeatedly. It is safe from
+  a *fresh container start*, where chain policies are `ACCEPT`. Inside a running
+  container it is not: `iptables -F` does not reset chain policies, so after a previous
+  run the flush leaves `OUTPUT DROP` with no allow rules, and the script then dies at its
+  own GitHub-metadata fetch — taking outbound networking with it. Restoring the three
+  chain policies to `ACCEPT` before running it is the fix.
+- **README:** *Architecture* and *Concurrency* are headings until phase 8; *Running the
+  concurrency test* until phase 5.
+
+### Process note
+
+This Outcome section was written after the merges rather than as the phase branch's last
+commit, because the deployed negotiate result did not exist until `main` had deployed.
+For later phases the workable order is: merge to `develop`, merge to `main` and deploy,
+then record the outcome on `develop`.
