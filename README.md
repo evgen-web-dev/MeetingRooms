@@ -98,9 +98,16 @@ different fixes. The placeholder page reports which one occurred.
 |---|---|---|
 | `url` containing `.service.signalr.net` plus `accessToken` | Azure SignalR is wired | — |
 | `connectionId` and `availableTransports` | the connection string was **not read** | check the setting name, and that it is an *Application setting* rather than a *Connection string* |
-| `500` — *Azure SignalR Service is not connected yet* | it **was** read, but the service is unreachable | check the endpoint, the access key, and outbound networking |
+| `500` — *Azure SignalR Service is not connected yet* | it **was** read; the app has no server connection to the service **yet** | see below — transient and persistent mean different things |
 
 The second and third look similar from a browser but have nothing in common as causes.
+
+The third is also the **normal cold-start window**: on startup the SDK opens server
+connections to the service, and negotiate refuses until one is established. A request
+arriving in the first moments after a deploy or a restart therefore gets this response
+and the next one succeeds. Treat a single 500 straight after a deploy as expected; only
+a *persistent* one indicates a wrong endpoint, a wrong access key, or blocked outbound
+networking.
 
 ## Architecture
 
