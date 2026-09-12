@@ -41,7 +41,7 @@ Each is one commit. The tree builds after every one.
 | 9 | **(you)** `chore: add Microsoft.Azure.SignalR package` | `dotnet add src/backend/MeetingRooms.Api/MeetingRooms.Api.csproj package Microsoft.Azure.SignalR --version 1.33.1` |
 | 10 | `feat(api): add schedule hub, using Azure SignalR when configured` | `Api/Hubs/ScheduleHub.cs` (empty), `AddRealtime(configuration)`, `MapHub<ScheduleHub>("/hubs/schedule")` |
 | 11 | `feat(web): report the SignalR negotiate result on the placeholder page` | `wwwroot/index.html` gains a second check next to the health one |
-| 12 | `docs: add README skeleton` | links, one-line description, empty architecture and concurrency headings |
+| 12 | `docs: add README skeleton` | see "README contents" below - it carries facts that currently exist only in conversation |
 | 13 | `docs: record phase 1 outcome` | the Outcome section below, after the deploy |
 
 ### Layer references (task 2)
@@ -54,6 +54,27 @@ Api            -> Application, Infrastructure
 
 Nothing else. Domain and Infrastructure are empty after this phase; that is expected -
 the point is that the graph is in place and visible from the first commit.
+
+### README contents (task 12)
+
+More than a stub, because several operational facts currently live only in
+conversation and would be re-derived by clicking around the Azure portal:
+
+- The deployed URL and the repository URL (assignment #10).
+- One-line description of what the app is.
+- **Run it locally:** `dotnet run --project src/backend/MeetingRooms.Api`, which
+  serves on `http://localhost:5248` under the `http` launch profile, against the
+  `db` container.
+- **Run the concurrency test:** a placeholder heading until phase 5 fills it in.
+- **Azure configuration:** a table of *setting name -> where it lives -> what it is
+  for*, with **no values**. It must record that `ConnectionStrings:DefaultConnection`
+  comes from the App Service *Connection strings* tab (named `DefaultConnection`,
+  type SQL Server) while `Azure__SignalR__ConnectionString` is an *App setting*;
+  that `Jwt__SigningKey` and `Seed__AdminEmail` / `Seed__AdminPassword` arrive in
+  phase 3; and the baseline - Basic B1, Always On, single instance, WebSockets on,
+  HTTPS Only on, "Allow Azure services" on for the SQL server, SQL on a provisioned
+  tier.
+- Empty headings for **Architecture** and **Concurrency**, filled in phase 8.
 
 ### What changes vs. the reference project
 

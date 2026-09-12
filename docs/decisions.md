@@ -25,7 +25,10 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
 - **Controllers** for endpoints (`AuthController : ControllerBase`), not minimal APIs.
 - **Extension methods for service registration**, one `DependencyInjectionExtensions`
   per layer, so `Program.cs` stays a list of module calls rather than a dumping ground.
-- **Scalar** as the OpenAPI exploration tool.
+- **Scalar** as the OpenAPI exploration tool, served in **all** environments
+  including the deployed app, so a reviewer can exercise the API without cloning
+  anything. This publishes the API surface publicly - nothing secret is in it, and
+  the trade is stated in the README.
 
 ## API surface and errors
 
@@ -40,6 +43,11 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
 - **Global exception handler** as the safety net.
 - **`-Request` / `-Response` DTO naming** — `CreateRoomRequest`, `BookSlotResponse`.
 - **Conflict contract:** HTTP 409 + `ProblemDetails` + error code `SlotAlreadyBooked`.
+- **Every endpoint is a controller action, with no exceptions** - `/health` included,
+  even though it is a diagnostic rather than a resource. Its URL stays `/health`.
+- **Unmatched `/api/...` routes return a 404 `ProblemDetails`**, not the SPA's
+  `index.html`. `MapFallbackToFile` would otherwise answer them with a 200 and a
+  page, which is the wrong answer for an API under review.
 
 ## Validation
 
@@ -187,6 +195,14 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
   - `.config/dotnet-tools.json` committed, pinning `dotnet-ef`;
   - a startup `GetPendingMigrationsAsync()` guard that refuses to start outside
     Development when migrations are pending, so "I forgot" fails loudly.
+- **No `UseHttpsRedirection` middleware.** App Service terminates TLS at its front
+  end, so the app sees plain HTTP; without forwarded-headers configuration the
+  middleware can redirect in a loop. The platform's **HTTPS Only** setting performs
+  the redirect before the request ever reaches us.
+- **The dev container does not persist `~/.microsoft` or globally-installed dotnet
+  tools.** `dotnet user-secrets` values and a global `dotnet-ef` survive a container
+  restart but are lost on a rebuild. `.config/dotnet-tools.json` plus
+  `dotnet tool restore` covers the tool; secrets have to be re-added by hand.
 - **Roles and demo rooms are seeded in every environment**; the admin account is read
   from configuration and fails loudly outside Development if absent.
 - **Package installs are performed by the repository owner, not by Claude.** Claude
