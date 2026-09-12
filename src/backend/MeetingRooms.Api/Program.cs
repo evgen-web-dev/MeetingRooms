@@ -1,9 +1,11 @@
 using MeetingRooms.Api;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddExceptionHandlersWithProblemDetails();
+builder.Services.AddOpenApi();
 
 // The composition root owns the clock. Nothing below reads DateTime.UtcNow directly,
 // so time can be substituted in a test without reaching for a static.
@@ -18,6 +20,20 @@ app.UseExceptionHandler();
 // UseStaticFiles then serves it from wwwroot.
 app.UseDefaultFiles();
 app.UseStaticFiles();
+
+// Deliberately not gated to Development: a reviewer must be able to exercise the API
+// on the deployed URL without cloning anything. Nothing secret is in the document.
+app.MapOpenApi();
+app.MapScalarApiReference(options =>
+{
+    // The reference page is public, so it makes no calls we did not ask for:
+    // no usage reporting, no agent panel, and no fonts fetched from an external host.
+    // Disabling the fonts also makes the page render identically inside the dev
+    // container, whose firewall would block them.
+    options.DisableTelemetry();
+    options.DisableAgent();
+    options.DisableDefaultFonts();
+});
 
 app.MapControllers();
 
