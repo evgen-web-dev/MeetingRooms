@@ -10,4 +10,9 @@
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\MeetingRooms.Application\MeetingRooms.Application.csproj" />
+    <ProjectReference Include="..\MeetingRooms.Infrastructure\MeetingRooms.Infrastructure.csproj" />
+  </ItemGroup>
+
 </Project>
