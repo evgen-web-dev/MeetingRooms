@@ -1,4 +1,5 @@
 using MeetingRooms.Api;
+using MeetingRooms.Api.Hubs;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -6,6 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddExceptionHandlersWithProblemDetails();
 builder.Services.AddOpenApi();
+builder.Services.AddRealtime(builder.Configuration);
 
 // The composition root owns the clock. Nothing below reads DateTime.UtcNow directly,
 // so time can be substituted in a test without reaching for a static.
@@ -36,6 +38,7 @@ app.MapScalarApiReference(options =>
 });
 
 app.MapControllers();
+app.MapHub<ScheduleHub>("/hubs/schedule");
 
 // An unmatched API route must fail as an API. Without this, MapFallbackToFile below
 // answers "/api/typo" with 200 and index.html, which is the wrong answer under review.

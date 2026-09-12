@@ -21,6 +21,36 @@ public static class DependencyInjectionExtensions
     }
 
     /// <summary>
+    /// Registers SignalR, backed by Azure SignalR Service when its connection string is
+    /// present and running in-process otherwise.
+    /// <para>
+    /// The fallback is real, not decorative: the app runs as a single instance, so
+    /// in-process SignalR is correct there. Clearing
+    /// <c>Azure__SignalR__ConnectionString</c> is therefore a configuration change with no
+    /// code change, which is the escape hatch if the service misbehaves in Azure. Locally
+    /// the setting is absent because the dev container's firewall cannot reach
+    /// <c>*.service.signalr.net</c>.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddRealtime(this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var signalRBuilder = services.AddSignalR();
+
+        // The key AddAzureSignalR() reads by default. In Azure it arrives as the app
+        // setting Azure__SignalR__ConnectionString.
+        var azureSignalRConnectionString = configuration["Azure:SignalR:ConnectionString"];
+
+        if (!string.IsNullOrWhiteSpace(azureSignalRConnectionString))
+        {
+            signalRBuilder.AddAzureSignalR();
+        }
+
+        return services;
+    }
+
+    /// <summary>
     /// Turns a failed use case into the API's error response.
     /// <para>
     /// The <see cref="ProblemDetails"/> is built by MVC's own
