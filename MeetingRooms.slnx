@@ -2,5 +2,8 @@
   <Folder Name="/src/" />
   <Folder Name="/src/backend/">
     <Project Path="src/backend/MeetingRooms.Api/MeetingRooms.Api.csproj" />
+    <Project Path="src/backend/MeetingRooms.Application/MeetingRooms.Application.csproj" />
+    <Project Path="src/backend/MeetingRooms.Domain/MeetingRooms.Domain.csproj" />
+    <Project Path="src/backend/MeetingRooms.Infrastructure/MeetingRooms.Infrastructure.csproj" />
   </Folder>
 </Solution>

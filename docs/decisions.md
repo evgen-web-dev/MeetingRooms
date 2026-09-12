@@ -25,21 +25,56 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
 - **Controllers** for endpoints (`AuthController : ControllerBase`), not minimal APIs.
 - **Extension methods for service registration**, one `DependencyInjectionExtensions`
   per layer, so `Program.cs` stays a list of module calls rather than a dumping ground.
-- **Scalar** as the OpenAPI exploration tool.
+- **Scalar** as the OpenAPI exploration tool, served in **all** environments
+  including the deployed app, so a reviewer can exercise the API without cloning
+  anything. This publishes the API surface publicly - nothing secret is in it, and
+  the trade is stated in the README.
+- **The composition root owns the clock.** `TimeProvider.System` is registered in DI and
+  injected wherever time is needed; nothing below `Program.cs` reads `DateTime.UtcNow`
+  directly. This is what lets the booking timestamp be controlled from a test without
+  reaching for a static.
 
 ## API surface and errors
 
 - **Result pattern** for expected failures — returned, not thrown. A 500 means
   "nothing caught or classified this", never a control-flow branch.
+- **`OperationResult` refuses to lie about itself.** `Success(value)` throws on a null
+  value, reading `Value` on a failed result throws instead of returning `default!`, and
+  `Failure()` rejects an empty error list. Callers may therefore rely on a failure always
+  having `Errors[0]`, and a missed `Succeeded` check fails at the mistake rather than
+  somewhere downstream of it.
 - **Business errors are string error codes** (`InvalidEmailOrPassword`,
   `SlotAlreadyBooked`); validation errors may be text.
 - **Business errors and unhandled exceptions are wrapped in `ProblemDetails`;
   validation errors in `ValidationProblemDetails`**, matching what `[ApiController]`
   produces natively so hand-rolled and framework-generated failures look identical
   to a client.
+
+  > *Settled during phase 1.* The `ProblemDetails` object is built by MVC's own
+  > `ProblemDetailsFactory` — reached through `ControllerBase.ProblemDetailsFactory`, or
+  > left to the writer to fill in from the exception handler — rather than by a
+  > hand-rolled factory plus our own status-code-to-RFC-URI table. The framework already
+  > owns that mapping, so reproducing it means keeping a second table in sync forever,
+  > and "identical to a client" becomes something we maintain by vigilance instead of by
+  > construction. Confirmed empirically: the `type` the framework emits for a 500 is
+  > character-for-character the URI the hand-rolled table carried. The same factory
+  > supplies `CreateValidationProblemDetails` for the validation filter. No package is
+  > required — it is in the `Microsoft.AspNetCore.App` shared framework.
+
+- **An unmapped error code maps to 500, not 400.** A missing row in
+  `ErrorStatusCodeMapper` is a bug, and a bug should be loud rather than presenting
+  itself to the client as a client error.
+- **`errorDetails` carries classified business failures only.** It exists so a client can
+  branch on a business condition; a routing miss is not one. Unmatched `/api` routes
+  therefore return a plain framework `ProblemDetails` with no error code.
 - **Global exception handler** as the safety net.
 - **`-Request` / `-Response` DTO naming** — `CreateRoomRequest`, `BookSlotResponse`.
 - **Conflict contract:** HTTP 409 + `ProblemDetails` + error code `SlotAlreadyBooked`.
+- **Every endpoint is a controller action, with no exceptions** - `/health` included,
+  even though it is a diagnostic rather than a resource. Its URL stays `/health`.
+- **Unmatched `/api/...` routes return a 404 `ProblemDetails`**, not the SPA's
+  `index.html`. `MapFallbackToFile` would otherwise answer them with a 200 and a
+  page, which is the wrong answer for an API under review.
 
 ## Validation
 
@@ -187,6 +222,14 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
   - `.config/dotnet-tools.json` committed, pinning `dotnet-ef`;
   - a startup `GetPendingMigrationsAsync()` guard that refuses to start outside
     Development when migrations are pending, so "I forgot" fails loudly.
+- **No `UseHttpsRedirection` middleware.** App Service terminates TLS at its front
+  end, so the app sees plain HTTP; without forwarded-headers configuration the
+  middleware can redirect in a loop. The platform's **HTTPS Only** setting performs
+  the redirect before the request ever reaches us.
+- **The dev container does not persist `~/.microsoft` or globally-installed dotnet
+  tools.** `dotnet user-secrets` values and a global `dotnet-ef` survive a container
+  restart but are lost on a rebuild. `.config/dotnet-tools.json` plus
+  `dotnet tool restore` covers the tool; secrets have to be re-added by hand.
 - **Roles and demo rooms are seeded in every environment**; the admin account is read
   from configuration and fails loudly outside Development if absent.
 - **Package installs are performed by the repository owner, not by Claude.** Claude

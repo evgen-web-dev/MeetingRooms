@@ -38,6 +38,11 @@ Work proceeds in phases. Each phase is planned and approved before
 implementation starts. When a phase is done, we record what actually happened
 before moving on.
 
+Decisions made while planning or running a phase get folded into
+`docs/decisions.md` before that phase merges. A phase doc is a record of one
+piece of work, not where standing decisions live - otherwise later phases end up
+searching old phase docs to find out what was decided.
+
 ## Git and branching
 - `main` is deployable and is what Azure deploys. It only receives verified
   merges, at phase boundaries.
@@ -60,6 +65,8 @@ before moving on.
   is wrong, say so and stop - don't work around it silently.
 - `docs/plan.md` - the settled plan: design reasoning, phase sequence, risks.
 - `docs/phases/` - one doc per phase, written and approved before implementation.
+- `docs/devcontainer-changes.md` - pending changes to `.devcontainer/`, which I make
+  myself. Claude never edits that directory.
 - `docs/reference/` - a previous project of mine, plus notes on it. Gitignored,
   not part of this solution. Never edit it, never add it to a project, never
   assume it compiles here.
