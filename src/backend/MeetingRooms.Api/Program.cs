@@ -1,6 +1,13 @@
+using MeetingRooms.Api;
+
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddExceptionHandlersWithProblemDetails();
+
 var app = builder.Build();
+
+// First in the pipeline, so it sees every exception thrown by anything below it.
+app.UseExceptionHandler();
 
 // Order matters. UseDefaultFiles rewrites "/" to "/index.html";
 // UseStaticFiles then serves it from wwwroot.

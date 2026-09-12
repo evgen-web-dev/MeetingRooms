@@ -1,4 +1,5 @@
 using MeetingRooms.Api.Errors;
+using MeetingRooms.Api.ExceptionHandlers;
 using MeetingRooms.Application.Results;
 using Microsoft.AspNetCore.Mvc;
 
@@ -6,6 +7,19 @@ namespace MeetingRooms.Api;
 
 public static class DependencyInjectionExtensions
 {
+    /// <summary>
+    /// Registers the global exception handler together with the ProblemDetails services it
+    /// writes through. The two belong in one call: <c>UseExceptionHandler()</c> needs a
+    /// registered handler, and the handler needs <see cref="IProblemDetailsService"/>.
+    /// </summary>
+    public static IServiceCollection AddExceptionHandlersWithProblemDetails(this IServiceCollection services)
+    {
+        services.AddExceptionHandler<AppExceptionHandler>();
+        services.AddProblemDetails();
+
+        return services;
+    }
+
     /// <summary>
     /// Turns a failed use case into the API's error response.
     /// <para>
