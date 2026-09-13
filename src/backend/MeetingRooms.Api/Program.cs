@@ -1,5 +1,6 @@
 using MeetingRooms.Api;
 using MeetingRooms.Api.Hubs;
+using MeetingRooms.Application;
 using MeetingRooms.Infrastructure;
 using Scalar.AspNetCore;
 
@@ -9,7 +10,9 @@ builder.Services.AddControllers();
 builder.Services.AddExceptionHandlersWithProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.AddRealtime(builder.Configuration);
+builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructurePersistence(builder.Configuration);
+builder.Services.AddInfrastructureServices();
 
 // The composition root owns the clock. Nothing below reads DateTime.UtcNow directly,
 // so time can be substituted in a test without reaching for a static.
