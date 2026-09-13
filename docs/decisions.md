@@ -185,6 +185,25 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
 ## Frontend
 
 - **React + TypeScript + Tailwind**, built by Vite into the API's `wwwroot`.
+- **Vite owns `wwwroot` entirely.** The build emits into
+  `src/backend/MeetingRooms.Api/wwwroot` with `emptyOutDir: true`, and **nothing in that
+  directory is tracked** — it is build output in its entirety. Static files that must
+  ship (favicon, `robots.txt`) go in `src/frontend/public/`, which Vite copies into the
+  output, so no hand-maintained file ever lives in a directory a build tool clears.
+- **Tailwind 4 through `@tailwindcss/vite`**, not PostCSS. No `tailwind.config.js`, no
+  `postcss.config.js`, no `content` globs — the plugin plus `@import "tailwindcss";` in
+  one CSS file is the whole wiring, and source detection is automatic. Worth stating
+  because Tailwind 3 habits look for a config file that no longer exists.
+- **The dev server proxies `/health`, `/api` and `/hubs` to port 5000**, with `ws: true`
+  on the hub route. Same-origin in production, proxied in development, so application
+  code never carries a base URL for either.
+- **`tsc --noEmit` runs before `vite build`.** Vite transpiles per file through
+  Rolldown/Oxc and never typechecks, so without that step a type error reaches a deploy
+  unannounced. `verbatimModuleSyntax` and `isolatedModules` are set for the same reason:
+  they restrict the code to the subset where per-file transpilation and whole-program
+  compilation provably agree.
+- **No ESLint, no Prettier, no frontend tests.** Out of scope at this deadline; the one
+  mandated automated test is the concurrency test.
 - **No Redux and no React Query.** Auth state in a React context; everything else is
   local component state. Revisit only if a screen proves it insufficient.
 - **The JWT is held in `localStorage`**, with the XSS exposure written into the README
@@ -236,7 +255,24 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
   supplies exact commands with pinned versions (the 10.0.x line, matching SDK 10.0.401
   and the existing `Microsoft.AspNetCore.OpenApi 10.0.12`) and verifies afterwards via
   `dotnet restore` / `dotnet build`.
-
+- **The frontend is built by the deploy workflow, not by an MSBuild target.**
+  `npm ci --ignore-scripts && npm run build` runs **before** `dotnet publish`, because
+  MSBuild globs `wwwroot` at publish time and would otherwise package an empty one. It
+  stays out of the `.csproj` so a local `dotnet build` never requires a node toolchain.
+- **npm dependencies are pinned exactly and installed behind a release-age cooldown.**
+  `npm install --ignore-scripts --min-release-age 3`: exact versions in `package.json`, a
+  committed `package-lock.json`, and a three-day cooldown that keeps anything published in
+  the last 72 hours out of the tree — the window in which a compromised publish is usually
+  caught and unpublished. Three days rather than seven because React 19.3.0 and Vite 8.3.0
+  were themselves three to four days old and a longer cooldown cannot resolve them; the
+  cooldown is why `enhanced-resolve` and `nanoid` sit one patch behind latest.
+  `--ignore-scripts` costs nothing here: the only package in the tree declaring a lifecycle
+  script is `fsevents`, which is macOS-only, because every native toolchain involved
+  (Rolldown, Tailwind's Oxide, TypeScript 7) ships per-platform binaries as optional
+  dependencies instead. CI runs `npm ci`, which installs the locked tree by integrity hash
+  and neither re-resolves versions nor re-applies the cooldown — so the tree deployed is
+  the tree reviewed. `npm audit` reported zero vulnerabilities; `npm audit signatures`
+  could not run, because the container's firewall blocks `tuf-repo-cdn.sigstore.dev`.
 ---
 
 ## Resolved during planning

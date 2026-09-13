@@ -8,6 +8,7 @@ on:
 env:
   AZURE_WEBAPP_NAME: meetingrooms
   API_PROJECT: src/backend/MeetingRooms.Api/MeetingRooms.Api.csproj
+  FRONTEND_DIR: src/frontend
 
 jobs:
   build-and-deploy:
@@ -18,6 +19,22 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      # Must run before the publish below: Vite writes into the API project's wwwroot,
+      # and MSBuild globs that directory when the publish runs. Reversing these two steps
+      # produces a deploy with no frontend and no error.
+      #
+      # `npm ci` installs the committed lockfile exactly - it neither re-resolves versions
+      # nor honours a release-age cooldown, so the tree deployed is the tree reviewed.
+      - name: Build frontend
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm ci --ignore-scripts && npm run build
 
       - name: Publish
         run: dotnet publish ${{ env.API_PROJECT }} -c Release -o ./publish
