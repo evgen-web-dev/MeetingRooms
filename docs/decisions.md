@@ -76,6 +76,11 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   `index.html`. `MapFallbackToFile` would otherwise answer them with a 200 and a
   page, which is the wrong answer for an API under review.
 
+- **401 and 403 keep the framework's empty body.** JWT bearer answers an unauthenticated
+  request with `WWW-Authenticate` and no payload, and a role miss with a bare 403. The
+  status is the contract; overriding correct framework behaviour to add a body is
+  machinery. Stated here so the absence reads as a decision.
+
 ## Validation
 
 - **FluentValidation**, with validators applied in **one place — a global MVC action
@@ -87,6 +92,12 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   > `IAsyncActionFilter`. Same "one place, not per endpoint" outcome, correct layer.
   > (A PHP/Laravel false friend: there, middleware sees a parsed request.)
 
+- **Validators carry payload-only rules.** A check belongs in a validator when it can be
+  settled from the request alone, needs no I/O, and naming the field leaks nothing. The
+  password *policy* is therefore Identity's, not the validator's; the only password rule
+  in a validator is a length cap, which is not policy but a bound on how much hashing an
+  unauthenticated caller can demand.
+
 ## Persistence
 
 - **SQL Server** — Azure SQL Database in production, a SQL Server container locally.
@@ -96,6 +107,15 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   performs more than one write — registration (create user + assign role). EF already
   wraps a single `SaveChangesAsync` in an implicit transaction, so the explicit
   envelope elsewhere is ceremony.
+  > *Settled during phase 3.* The port is a single
+  > `ExecuteInTransactionAsync(operation, ct)` rather than a begin/commit/rollback trio:
+  > the trio throws under `EnableRetryOnFailure`, which refuses user-initiated transactions
+  > a retrying execution strategy cannot replay. Folding the strategy, the transaction and
+  > the save into one call leaves no way to get that wrong. It commits **only when the
+  > returned result succeeded** - `UserManager` saves as it goes, so a failure that is
+  > returned rather than thrown would otherwise commit half a use case - which is why the
+  > result type is constrained to `OperationResult`.
+
 - Explicit transactions are wrapped in EF's execution strategy, because
   `EnableRetryOnFailure` is required for Azure SQL and otherwise rejects
   user-initiated transactions.
@@ -167,6 +187,50 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
   `Seed__AdminEmail`, `Seed__AdminPassword`) and in `dotnet user-secrets` locally.
   Never in `appsettings.json`, never in git. No Key Vault — more machinery than this
   project justifies.
+
+- **Identity keys are `int`**, not the default string GUID: slots reference their booker
+  by a foreign key, and the default would put an `nvarchar(450)` column on the table the
+  booking path writes to. `AppDbContext` therefore supplies all three
+  `IdentityDbContext<AppUser, IdentityRole<int>, int>` arguments; the one-argument form
+  compiles and silently gives string keys.
+- **`AddIdentityCore`, never `AddIdentity`.** `AddIdentity` calls `AddAuthentication`
+  internally and makes Identity's cookie scheme the default, which in a JWT-only API
+  outranks the bearer scheme and turns every `[Authorize]` endpoint into a redirect to a
+  login page that does not exist.
+- **Identity's default password policy is kept unchanged**, so there is one source of
+  truth for it. The visible consequence: a weak password comes back as a `ProblemDetails`
+  carrying Identity's own codes, not as a field-keyed `ValidationProblemDetails`.
+- **Two Identity *user* options are set:** `RequireUniqueEmail`, and an empty
+  `AllowedUserNameCharacters`. The user name here is the email address, and Identity's
+  default character allow-list is narrower than what an address may legally contain - an
+  apostrophe would fail a check the request validator already covers.
+- **Claims use short names - `sub`, `email`, `role` - declared once in
+  `Application/Auth/AppClaimTypes`** and used by both the issuing adapter and the API host.
+  `MapInboundClaims` is off, and `TokenValidationParameters.RoleClaimType` is set to the
+  same `role`. Left at its default, `[Authorize(Roles = ...)]` looks for a WS-Federation
+  URI, finds none, and answers 403 to a token that visibly contains the right roles.
+- **The signing key is base64 and at least 32 bytes, validated at startup.** HS256 with a
+  shorter key throws on the first token issued, which is a 500 on someone's first login
+  rather than an application that refused to boot.
+- **`ClockSkew` is 30 seconds.** Skew absorbs a difference between the issuing and the
+  validating clock; here they are the same process, so the five-minute default only
+  extends every token's real lifetime.
+- **Login reports one error code for every failure, and hashes the submitted password even
+  when no account matches.** One code hides which half was wrong; without the hash, the
+  response time would answer it anyway.
+- **Registration reports `EmailAlreadyRegistered` explicitly.** This diverges from the
+  reference project, which folds duplicate-user and duplicate-email into a generic code. A
+  registration endpoint cannot hide that an address is taken - the request fails either
+  way - so the vague code buys nothing and leaves the form unable to say what to fix.
+- **Unmapped Identity codes are dropped, and a result with everything dropped carries
+  `UnexpectedError`.** An empty error list is not an option: `OperationResult.Failure`
+  rejects one. Mapped codes are de-duplicated, because a duplicate registration fails as
+  `DuplicateUserName` *and* `DuplicateEmail` when the user name is the email.
+- **Registration returns 201 with no `Location` header and issues no token.** Nothing in
+  this API exposes a user as a resource, and the client logs in as a separate step.
+- **`GET /api/auth/me` reads claims only and touches no database.** Everything it returns
+  is already in the token; reading it back is also how a claim-type mismatch becomes
+  visible.
 
 ## Real-time
 
@@ -293,6 +357,16 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
   and neither re-resolves versions nor re-applies the cooldown — so the tree deployed is
   the tree reviewed. `npm audit` reported zero vulnerabilities; `npm audit signatures`
   could not run, because the container's firewall blocks `tuf-repo-cdn.sigstore.dev`.
+- **Startup applies migrations, then seeds roles, then the administrator** - in that
+  order, because a role cannot be seeded into a database with no tables and an
+  administrator cannot be granted a role that does not exist. Every step is idempotent, so
+  a restart applies nothing.
+- **`/health` reports database reachability** as well as whether a connection string is
+  configured, which separates "absent" from "present and wrong" without reading Azure
+  logs. It goes through a port rather than injecting `AppDbContext` into a controller, and
+  carries a three-second timeout of its own so that a database that is down cannot make
+  the health endpoint hang behind the retry strategy.
+
 ---
 
 ## Resolved during planning
