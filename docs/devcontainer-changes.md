@@ -9,6 +9,14 @@ a **Rebuild Container**, so do them together, **before phase 3 starts**.
 
 The background for both is in `docs/decisions.md` under *Deployment and operations*.
 
+There is also a **Change C**, below, which is **not pending**: it is a contingency for
+reaching Azure SignalR from inside the container, written down during phase 1 and
+deliberately not applied. Do it only if a deploy's negotiate misbehaves.
+
+> **Read the corrected B5 before running `init-firewall.sh` by hand.** It previously
+> described the script as safe to re-run; inside a running container that can leave you
+> with no outbound network.
+
 ---
 
 ## Change A - persist `dotnet user-secrets` across rebuilds
@@ -166,12 +174,36 @@ laptop. The rule needs updating whenever your ISP reassigns your address.
 
 ### B5. Test without a rebuild
 
-The script destroys and recreates its ipset on each run, so it is safe to run
-repeatedly:
+> **Corrected 2026-09-13 (phase 1).** This section previously said the script "destroys
+> and recreates its ipset on each run, so it is safe to run repeatedly". That is true
+> only from a **fresh container start**. Re-running it inside a **running** container
+> can take the container off the network. Read the warning below before running it.
+
+**Why re-running is not automatically safe.** `iptables -F` (line 9) deletes rules but
+**does not reset chain policies**. After any previous successful run the `OUTPUT` policy
+is already `DROP`, so the moment the script flushes, you have `OUTPUT DROP` with zero
+allow rules. The script re-adds only DNS, SSH and loopback (lines 28-38) and then, at
+line 44, runs:
 
 ```bash
+gh_ranges=$(curl -s https://api.github.com/meta)
+```
+
+That is outbound TCP 443, which nothing permits yet, so it returns empty and the script
+exits at its own `ERROR: Failed to fetch GitHub IP ranges` guard — **leaving the
+container with no outbound network.** On container start this never happens, because a
+fresh network namespace has policy `ACCEPT`.
+
+**Restore the precondition the script assumes, then run it:**
+
+```bash
+sudo iptables -P INPUT ACCEPT; sudo iptables -P OUTPUT ACCEPT; sudo iptables -P FORWARD ACCEPT
 sudo bash /workspace/.devcontainer/init-firewall.sh
 ```
+
+This leaves the firewall open for the few seconds the script takes, which is acceptable
+as a deliberate, supervised action. **If it ever does abort mid-way, the recovery is the
+same three `-P ... ACCEPT` commands**, or stopping and starting the container.
 
 Then:
 
@@ -198,6 +230,74 @@ script that runs on container start is the copy baked into the image**, so editi
   container.
 
 ---
+
+## Change C (contingency only) - let the dev container reach Azure SignalR
+
+**Do not do this pre-emptively.** Phase 1 deliberately skipped it: the deployed app is
+the definitive test of Azure SignalR, and it proved the service works. This entry exists
+so that *if* a future deploy's negotiate misbehaves, the bisection step is already
+written down.
+
+**What it buys.** Negotiate has three outcomes (see the table in `README.md`). Two of
+them - "connection string not read" and "read but no server connection" - look alike
+from a browser and have unrelated causes. Reaching the service from inside the container
+separates "the connection string or the resource is wrong" from "App Service
+configuration or WebSockets is wrong", which the deployed app alone cannot do.
+
+**What it does not buy.** It cannot test App Service's WebSockets setting, TLS
+termination, or whether the setting landed in the *Application settings* tab rather than
+the *Connection strings* tab. Those are Azure-side and only a deploy exercises them.
+
+### C1. `.devcontainer/init-firewall.sh` - the domain loop
+
+Exactly as B1, and with the same warning: insert **above** the final entry, which carries
+the `; do`. The hostname is the `Endpoint=https://<name>.service.signalr.net` value from
+the Azure SignalR connection string - currently `signalr-meetingrooms.service.signalr.net`.
+
+```bash
+    "api.nuget.org" \
+    "signalr-meetingrooms.service.signalr.net" \
+    "globalcdn.nuget.org"; do
+```
+
+**Do not add it to `REQUIRED`**, for the reason in B2: a DNS failure there aborts the
+script, and per the corrected B5 that can leave the container with no network.
+
+### C2. Apply and check
+
+Follow the corrected procedure in **B5** - reset the chain policies first, then run the
+script. Then:
+
+```bash
+timeout 5 bash -c 'cat < /dev/null > /dev/tcp/signalr-meetingrooms.service.signalr.net/443' \
+  && echo REACHABLE || echo BLOCKED
+```
+
+No port rule is needed; the allow rule matches all ports to allowed IPs, and the SDK
+connects over `wss://` on 443.
+
+### C3. Run the app with the real connection string
+
+Start it from **your own terminal**, not through Claude, so the connection string never
+enters a transcript:
+
+```bash
+Azure__SignalR__ConnectionString='<paste>' ASPNETCORE_URLS=http://0.0.0.0:5000 \
+  dotnet run --project src/backend/MeetingRooms.Api --no-launch-profile
+```
+
+Success is `POST /hubs/schedule/negotiate?negotiateVersion=1` returning a `url`
+containing `.service.signalr.net` plus an `accessToken`. Allow a few seconds after
+startup: the SDK must establish a server connection first, and until it does, negotiate
+returns the cold-start 500 described in `README.md`.
+
+### C4. Caveats
+
+- **This is temporary unless you rebuild.** Per B6, the script that runs on container
+  start is the copy baked into the image. Fine for a contingency test; if it turns out
+  you want it permanently, fold it in alongside Change B, which needs a rebuild anyway.
+- **Endpoint IPs rotate.** The script resolves DNS once per run, so a rotation
+  mid-session presents as "it worked, then stopped". Re-run the script.
 
 ## How the pieces activate
 
