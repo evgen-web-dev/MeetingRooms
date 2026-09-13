@@ -1,19 +1,56 @@
 using MeetingRooms.Api;
+using MeetingRooms.Api.Filters;
 using MeetingRooms.Api.Hubs;
+using MeetingRooms.Api.OpenApi;
+using MeetingRooms.Application;
+using MeetingRooms.Application.Options;
+using MeetingRooms.Infrastructure;
+using MeetingRooms.Infrastructure.Persistence;
+using MeetingRooms.Infrastructure.Seeders;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
+// One filter registration covers every endpoint, so no controller can forget to validate.
+builder.Services.AddControllers(options => options.Filters.Add<AsyncValidationFilter>());
 builder.Services.AddExceptionHandlersWithProblemDetails();
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options =>
+{
+    // The scheme itself, and then the per-operation requirement that points at it.
+    options.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
+    options.AddOperationTransformer<AuthorizedOperationTransformer>();
+});
 builder.Services.AddRealtime(builder.Configuration);
+builder.Services.AddApplicationServices();
+builder.Services.AddInfrastructurePersistence(builder.Configuration);
+builder.Services.AddInfrastructureServices();
+builder.Services.AddJwtAuthentication(builder.Configuration);
+builder.Services.AddAppValidation();
 
 // The composition root owns the clock. Nothing below reads DateTime.UtcNow directly,
 // so time can be substituted in a test without reaching for a static.
 builder.Services.AddSingleton(TimeProvider.System);
 
 var app = builder.Build();
+
+// ValidateOnStart fires when the host starts, which is after the block below. Resolving the
+// options here instead means bad configuration is reported before anything writes to the
+// database, and the first error in the log names the setting that is actually wrong.
+_ = app.Services.GetRequiredService<IOptions<JwtOptions>>().Value;
+
+// Schema first, then reference data, then the account that needs it: seeding a role into a
+// database with no tables fails, and an administrator cannot be granted a role that does not
+// exist yet. Applying migrations on start is safe because the deployment is a single instance
+// - see docs/decisions.md - and every step below is idempotent, so a restart is a no-op.
+await using (var startupScope = app.Services.CreateAsyncScope())
+{
+    await startupScope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
+
+    await IdentitySeeder.SeedRolesAsync(startupScope.ServiceProvider);
+    await IdentitySeeder.SeedAdminAsync(startupScope.ServiceProvider, app.Environment.IsDevelopment());
+}
 
 // First in the pipeline, so it sees every exception thrown by anything below it.
 app.UseExceptionHandler();
@@ -22,6 +59,11 @@ app.UseExceptionHandler();
 // UseStaticFiles then serves it from wwwroot.
 app.UseDefaultFiles();
 app.UseStaticFiles();
+
+// After the static files above: the SPA bundle is public, and only endpoints below this
+// point are ever gated. Authentication identifies the caller; authorization decides.
+app.UseAuthentication();
+app.UseAuthorization();
 
 // Deliberately not gated to Development: a reviewer must be able to exercise the API
 // on the deployed URL without cloning anything. Nothing secret is in the document.
@@ -35,6 +77,10 @@ app.MapScalarApiReference(options =>
     options.DisableTelemetry();
     options.DisableAgent();
     options.DisableDefaultFonts();
+
+    // Preselects the scheme the document declares, so the Authorize control is ready to take
+    // a token rather than asking which of several schemes is meant.
+    options.AddPreferredSecuritySchemes(BearerSecuritySchemeTransformer.SchemeName);
 });
 
 app.MapControllers();

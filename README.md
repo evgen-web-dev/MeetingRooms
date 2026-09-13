@@ -26,6 +26,32 @@ run. Without this the API works but `/` returns 404, because there is no page to
 cd src/frontend && npm ci --ignore-scripts && npm run build
 ```
 
+The API also needs a JWT signing key before it will start. It is validated at startup, so a
+missing or too-short key stops the application rather than failing on the first login:
+
+```bash
+openssl rand -base64 32          # 32 bytes is the minimum the app accepts
+
+cd src/backend/MeetingRooms.Api
+dotnet user-secrets set 'Jwt:SigningKey' '<the base64 value>'
+```
+
+The seeded administrator is optional in Development - without it the app logs a warning and
+starts with no admin account - and required in every other environment:
+
+```bash
+dotnet user-secrets set 'Seed:AdminEmail' 'admin@example.com'
+dotnet user-secrets set 'Seed:AdminPassword' '<password>'
+```
+
+The password has to satisfy ASP.NET Core Identity's default policy: at least six characters,
+with an uppercase letter, a lowercase letter, a digit and a non-alphanumeric character. **Use
+single quotes** - inside double quotes the shell expands `$`, and what gets stored is not what
+you typed.
+
+These values live in `dotnet user-secrets` locally and in App Service application settings in
+Azure. They are never in `appsettings.json` and never in git.
+
 Then, from the repository root:
 
 ```bash
