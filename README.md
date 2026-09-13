@@ -19,14 +19,31 @@ reaches every viewer in real time.
 
 Everything runs inside the dev container; there is no host setup.
 
+The frontend is built by Vite into the API's `wwwroot`, so build it once before the first
+run. Without this the API works but `/` returns 404, because there is no page to serve:
+
+```bash
+cd src/frontend && npm ci --ignore-scripts && npm run build
+```
+
+Then, from the repository root:
+
 ```bash
 dotnet run --project src/backend/MeetingRooms.Api
 ```
 
-The `http` launch profile serves on <http://localhost:5000>. The database connection
-string is supplied by the `ConnectionStrings__DefaultConnection` environment variable,
-already set in the container and pointing at the `db` service (SQL Server, database
-`MeetingRooms`).
+That serves on <http://localhost:5000>. The database connection string is supplied by the
+`ConnectionStrings__DefaultConnection` environment variable, already set in the container
+and pointing at the `db` service (SQL Server, database `MeetingRooms`).
+
+> **On macOS, port 5000 belongs to AirPlay Receiver.** The container binds it correctly and
+> `curl` inside the container works, but the forwarded port on the host resolves to Apple's
+> service instead, so the browser shows nothing useful. Either switch AirPlay Receiver off
+> (System Settings → General → AirDrop & Handoff), or remap the host side: VS Code's
+> **Ports** panel → *Change Local Address Port* on 5000.
+
+For frontend work, `npm run dev` in `src/frontend` serves on <http://localhost:5173> with
+hot reload, proxying `/api`, `/health` and `/hubs` to the API — so run both.
 
 Two things cannot be exercised from inside the dev container, because its outbound
 firewall allows only GitHub, npm, NuGet and Anthropic:
