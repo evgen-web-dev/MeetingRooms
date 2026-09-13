@@ -3,10 +3,12 @@ using MeetingRooms.Api.Filters;
 using MeetingRooms.Api.Hubs;
 using MeetingRooms.Api.OpenApi;
 using MeetingRooms.Application;
+using MeetingRooms.Application.Options;
 using MeetingRooms.Infrastructure;
 using MeetingRooms.Infrastructure.Persistence;
 using MeetingRooms.Infrastructure.Seeders;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -32,6 +34,11 @@ builder.Services.AddAppValidation();
 builder.Services.AddSingleton(TimeProvider.System);
 
 var app = builder.Build();
+
+// ValidateOnStart fires when the host starts, which is after the block below. Resolving the
+// options here instead means bad configuration is reported before anything writes to the
+// database, and the first error in the log names the setting that is actually wrong.
+_ = app.Services.GetRequiredService<IOptions<JwtOptions>>().Value;
 
 // Schema first, then reference data, then the account that needs it: seeding a role into a
 // database with no tables fails, and an administrator cannot be granted a role that does not
