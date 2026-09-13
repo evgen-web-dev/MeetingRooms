@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "types": ["vite/client"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Vite never typechecks. It transpiles per-file through Rolldown/Oxc, which strips
+    // type annotations without ever building a cross-file type graph - so `tsc --noEmit`
+    // in the build script is the only thing standing between a type error and a deploy.
+    //
+    // These two flags are what make per-file transpilation provably safe. Without them,
+    // `import { Room } from './types'; export { Room }` compiles to a runtime re-export
+    // of a type that does not exist at runtime: a per-file transpiler cannot tell Room
+    // is a type, while a whole-program compiler can. They force `export type { Room }`
+    // instead, constraining the code to the subset where both agree.
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "vite.config.ts"]
+}
