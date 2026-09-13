@@ -151,18 +151,24 @@ Locally, before the merge:
 
 ## Done when
 
-- [ ] Four projects build clean; the reference graph is exactly as specified above.
-- [ ] An unhandled exception produces 500 + ProblemDetails + `["UnexpectedError"]`,
+- [x] Four projects build clean; the reference graph is exactly as specified above.
+- [x] An unhandled exception produces 500 + ProblemDetails + `["UnexpectedError"]`,
       never a stack trace, and is logged.
-- [ ] `/health` is served by `HealthController` and its URL is unchanged.
-- [ ] `/api/<unmatched>` returns a 404 ProblemDetails.
-- [ ] Scalar and `/openapi/v1.json` load locally **and on the deployed app**.
-- [ ] The deployed `POST /hubs/schedule/negotiate?negotiateVersion=1` returns a `url`
+- [x] `/health` is served by `HealthController` and its URL is unchanged.
+- [x] `/api/<unmatched>` returns a 404 ProblemDetails.
+- [x] Scalar and `/openapi/v1.json` load locally **and on the deployed app**.
+- [x] The deployed `POST /hubs/schedule/negotiate?negotiateVersion=1` returns a `url`
       containing `.service.signalr.net` plus an `accessToken` - the proof that Azure
       SignalR is wired. (In-process SignalR returns `connectionId` instead; seeing
       that on the deployed app means the connection string is not being read.)
-- [ ] The placeholder page reports both checks.
-- [ ] README exists with both links.
+- [x] The placeholder page reports both checks.
+- [x] README exists with both links.
+
+*All eight closed 2026-09-13. Two notes on the wording above, both expanded in the
+Outcome: item 6's parenthetical is incomplete — negotiate has a **third** outcome, a
+plain-text 500 meaning the connection string was read but no server connection exists
+yet — and "HTTPS Only" under* What you do *was confirmed by following an `http://` URL
+on the deployed app and observing the redirect.*
 
 **Deploy after this phase:** yes - merge `phase/1-skeleton` into `develop` with
 `--no-ff`, then `develop` into `main`, which triggers the deploy.
