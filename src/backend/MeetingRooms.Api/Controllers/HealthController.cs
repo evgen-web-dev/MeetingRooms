@@ -1,4 +1,5 @@
 using MeetingRooms.Api.DTOs;
+using MeetingRooms.Application.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace MeetingRooms.Api.Controllers;
@@ -15,16 +16,22 @@ public sealed class HealthController : ControllerBase
     private readonly IConfiguration _configuration;
     private readonly IWebHostEnvironment _environment;
     private readonly TimeProvider _timeProvider;
+    private readonly IDatabaseHealthProbe _databaseHealthProbe;
 
-    public HealthController(IConfiguration configuration, IWebHostEnvironment environment, TimeProvider timeProvider)
+    public HealthController(
+        IConfiguration configuration,
+        IWebHostEnvironment environment,
+        TimeProvider timeProvider,
+        IDatabaseHealthProbe databaseHealthProbe)
     {
         _configuration = configuration;
         _environment = environment;
         _timeProvider = timeProvider;
+        _databaseHealthProbe = databaseHealthProbe;
     }
 
     [HttpGet]
-    public ActionResult<HealthResponse> Get()
+    public async Task<ActionResult<HealthResponse>> Get(CancellationToken cancellationToken)
     {
         // Report only whether the connection string is present.
         // Never return or log the value itself.
@@ -34,6 +41,7 @@ public sealed class HealthController : ControllerBase
             Status: "ok",
             Environment: _environment.EnvironmentName,
             Utc: _timeProvider.GetUtcNow().UtcDateTime,
-            ConnectionStringConfigured: !string.IsNullOrWhiteSpace(connectionString)));
+            ConnectionStringConfigured: !string.IsNullOrWhiteSpace(connectionString),
+            DatabaseReachable: await _databaseHealthProbe.CanConnectAsync(cancellationToken)));
     }
 }

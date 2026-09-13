@@ -68,6 +68,7 @@ public static class DependencyInjectionExtensions
         services.AddScoped<IUserIdentityService, UserIdentityService>();
         services.AddScoped<IRoleIdentityService, RoleIdentityService>();
         services.AddScoped<IAccessTokenService, JsonWebTokenService>();
+        services.AddScoped<IDatabaseHealthProbe, DatabaseHealthProbe>();
 
         return services;
     }
