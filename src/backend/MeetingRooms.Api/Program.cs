@@ -13,6 +13,7 @@ builder.Services.AddRealtime(builder.Configuration);
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructurePersistence(builder.Configuration);
 builder.Services.AddInfrastructureServices();
+builder.Services.AddJwtAuthentication(builder.Configuration);
 
 // The composition root owns the clock. Nothing below reads DateTime.UtcNow directly,
 // so time can be substituted in a test without reaching for a static.
@@ -27,6 +28,11 @@ app.UseExceptionHandler();
 // UseStaticFiles then serves it from wwwroot.
 app.UseDefaultFiles();
 app.UseStaticFiles();
+
+// After the static files above: the SPA bundle is public, and only endpoints below this
+// point are ever gated. Authentication identifies the caller; authorization decides.
+app.UseAuthentication();
+app.UseAuthorization();
 
 // Deliberately not gated to Development: a reviewer must be able to exercise the API
 // on the deployed URL without cloning anything. Nothing secret is in the document.

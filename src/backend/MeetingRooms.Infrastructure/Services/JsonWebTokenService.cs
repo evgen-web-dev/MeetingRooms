@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
+using MeetingRooms.Application.Auth;
 using MeetingRooms.Application.DTOs.Auth;
 using MeetingRooms.Application.Interfaces;
 using MeetingRooms.Application.Options;
@@ -12,19 +13,6 @@ namespace MeetingRooms.Infrastructure.Services;
 /// <inheritdoc cref="IAccessTokenService"/>
 public sealed class JsonWebTokenService : IAccessTokenService
 {
-    /// <summary>
-    /// The claim type carrying a role. Short, like <c>sub</c> and <c>email</c>, rather than
-    /// <see cref="ClaimTypes.Role"/>, which is a sixty-character WS-Federation URI repeated in
-    /// every token for no benefit.
-    /// <para>
-    /// It has one cost, and it is the trap worth naming: <c>[Authorize(Roles = ...)]</c>
-    /// resolves roles through <c>TokenValidationParameters.RoleClaimType</c>, so the validating
-    /// side must be told the same name. Leave it at its default and the token visibly contains
-    /// the right roles while every role-gated endpoint answers 403.
-    /// </para>
-    /// </summary>
-    public const string RoleClaimType = "role";
-
     private readonly IOptions<JwtOptions> _jwtOptions;
     private readonly TimeProvider _timeProvider;
 
@@ -56,11 +44,11 @@ public sealed class JsonWebTokenService : IAccessTokenService
 
         var claims = new List<Claim>(user.Roles.Count + 2)
         {
-            new(JwtRegisteredClaimNames.Sub, user.Id.ToString(CultureInfo.InvariantCulture)),
-            new(JwtRegisteredClaimNames.Email, user.Email)
+            new(AppClaimTypes.Sub, user.Id.ToString(CultureInfo.InvariantCulture)),
+            new(AppClaimTypes.Email, user.Email)
         };
 
-        claims.AddRange(user.Roles.Select(role => new Claim(RoleClaimType, role)));
+        claims.AddRange(user.Roles.Select(role => new Claim(AppClaimTypes.Role, role)));
 
         var tokenDescriptor = new SecurityTokenDescriptor
         {

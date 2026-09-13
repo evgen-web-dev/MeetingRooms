@@ -1,7 +1,12 @@
 using MeetingRooms.Api.Errors;
 using MeetingRooms.Api.ExceptionHandlers;
+using MeetingRooms.Application.Auth;
+using MeetingRooms.Application.Options;
 using MeetingRooms.Application.Results;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 
 namespace MeetingRooms.Api;
 
@@ -81,5 +86,83 @@ public static class DependencyInjectionExtensions
             .WithErrorCodes(result.Errors);
 
         return new ObjectResult(problemDetails) { StatusCode = statusCode };
+    }
+
+    /// <summary>
+    /// Binds and validates <see cref="JwtOptions"/>, then configures bearer authentication from
+    /// the validated values rather than by reading configuration a second time.
+    /// <para>
+    /// Validation runs at startup. Configuration arrives from App Service application settings
+    /// in Azure, where a missing or malformed signing key would otherwise surface as a 500 on
+    /// someone's first login instead of as an application that refused to start.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddJwtAuthentication(this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.AddOptions<JwtOptions>()
+            .Bind(configuration.GetSection(JwtOptions.SectionName))
+            .Validate(options => !string.IsNullOrWhiteSpace(options.Issuer),
+                $"{JwtOptions.SectionName}:{nameof(JwtOptions.Issuer)} is missing.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.Audience),
+                $"{JwtOptions.SectionName}:{nameof(JwtOptions.Audience)} is missing.")
+            .Validate(options => options.AccessTokenLifetimeMinutes > 0,
+                $"{JwtOptions.SectionName}:{nameof(JwtOptions.AccessTokenLifetimeMinutes)} must be greater than zero.")
+            .Validate(options => options.TryGetSigningKeyBytes(out _),
+                $"{JwtOptions.SectionName}:{nameof(JwtOptions.SigningKey)} must be base64-encoded "
+                + $"and at least {JwtOptions.MinimumSigningKeyBytes} bytes.")
+            .ValidateOnStart();
+
+        services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+            .Configure<IOptions<JwtOptions>>((bearerOptions, jwtOptions) =>
+            {
+                var jwt = jwtOptions.Value;
+
+                if (!jwt.TryGetSigningKeyBytes(out var signingKeyBytes))
+                {
+                    // Unreachable: the same check above refuses to start the application.
+                    throw new InvalidOperationException(
+                        $"{JwtOptions.SectionName}:{nameof(JwtOptions.SigningKey)} is unusable.");
+                }
+
+                // Without this, the legacy JWT to WS-Federation map rewrites "sub" and "role"
+                // into URI claim types on the way in, so the claims read back are not the
+                // claims that were issued.
+                bearerOptions.MapInboundClaims = false;
+
+                bearerOptions.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidIssuer = jwt.Issuer,
+                    ValidateAudience = true,
+                    ValidAudience = jwt.Audience,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(signingKeyBytes),
+
+                    // Pin the algorithm. Never let the token being validated choose the rules
+                    // by which it is validated - that is how "alg: none" became a class of bug.
+                    ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
+
+                    ValidateLifetime = true,
+
+                    // Skew exists to absorb a difference between the issuing and validating
+                    // clocks. Here they are the same process, so the five-minute default has
+                    // nothing to absorb and only extends every token's real lifetime.
+                    ClockSkew = TimeSpan.FromSeconds(30),
+
+                    // The half of the role wiring that lives on the validating side. Both names
+                    // come from the same constants the token is issued with.
+                    NameClaimType = AppClaimTypes.Sub,
+                    RoleClaimType = AppClaimTypes.Role
+                };
+            });
+
+        services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme);
+
+        services.AddAuthorization();
+
+        return services;
     }
 }
