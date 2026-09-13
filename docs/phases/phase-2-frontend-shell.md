@@ -209,18 +209,113 @@ On the deployed app:
 
 ## Done when
 
-- [ ] `src/frontend` builds with one command and emits into the API's `wwwroot`.
-- [ ] `wwwroot` holds no tracked files; the placeholder page is gone and its two checks
+- [x] `src/frontend` builds with one command and emits into the API's `wwwroot`.
+- [x] `wwwroot` holds no tracked files; the placeholder page is gone and its two checks
       live in the React page.
-- [ ] The page is visibly Tailwind-styled, proving the plugin is wired rather than merely
+- [x] The page is visibly Tailwind-styled, proving the plugin is wired rather than merely
       installed.
-- [ ] The app still boots, and `/health` still answers, with no `wwwroot` present.
-- [ ] `/scalar/`, `/openapi/v1.json` and the `/api/<unmatched>` 404 are unchanged.
-- [ ] `npm run dev` on 5173 reaches the API on 5000 through the proxy.
-- [ ] The workflow builds the frontend **before** `dotnet publish`.
-- [ ] The **deployed** page is the CI-built bundle, with both panels reporting correctly
+- [x] The app still boots, and `/health` still answers, with no `wwwroot` present.
+- [x] `/scalar/`, `/openapi/v1.json` and the `/api/<unmatched>` 404 are unchanged.
+- [x] `npm run dev` on 5173 reaches the API on 5000 through the proxy.
+- [x] The workflow builds the frontend **before** `dotnet publish`.
+- [x] The **deployed** page is the CI-built bundle, with both panels reporting correctly
       and Azure SignalR still wired. This is the exit criterion — a green local build
       retires nothing.
 
+*All eight closed 2026-09-13. One item needs the qualifier the Outcome expands on: item 4
+holds for a **fresh** build with no `wwwroot`, and not for a tree built with `wwwroot` and
+then stripped of it — those are different failures with different causes.*
+
 **Deploy after this phase:** yes — merge `phase/2-frontend-shell` into `develop` with
 `--no-ff`, then `develop` into `main`, which triggers the deploy.
+
+## Outcome
+
+**Completed and deployed 2026-09-13.** All six tasks done plus one unplanned commit, every
+Done-when item closed, and the exit criterion met: the deployed page is served from a
+CI-built Vite bundle.
+
+### Verified
+
+Locally, from the committed tree: `npm run build` clean (0.38 kB html, 6.92 kB css,
+222 kB js); `dotnet build` with zero warnings; `/` serving the hashed bundle with correct
+MIME types; the compiled CSS containing real Tailwind utilities rather than an empty file;
+`/health`, `/openapi/v1.json` and `/scalar/` unchanged; `/api/nope` still a 404
+`ProblemDetails`; a deep route still falling back to `index.html`; negotiate returning
+in-process `connectionId`, correct locally. In a browser: the page rendered styled, both
+panels reported correctly, the console was clean, and React DevTools showed a **production**
+build — confirming the bundle was being exercised rather than the dev server. `npm run dev`
+on 5173 reached the API through the proxy for `/health`, the hub negotiate and the `/api`
+404.
+
+On the deployed app: the GitHub Actions run succeeded with `Build frontend` ahead of
+`Publish`; the page rendered styled with no console errors; React DevTools again reported a
+production build; `/health`, `/openapi/v1.json` and `/scalar/` all loaded; and the realtime
+panel showed **Azure SignalR with an access token on the very first load after the deploy**.
+
+### Deviations from the plan
+
+1. **`tsconfig.json` needed two options this document did not name.** The first
+   `npm run build` failed with TS5097 (`allowImportingTsExtensions` required for
+   `import App from './App.tsx'`) and TS2882 (`import './index.css'` has no declaration
+   until `types: ["vite/client"]` brings Vite's ambient module declarations into scope).
+   Both are configuration gaps rather than bugs — `vite build` alone would have produced a
+   working bundle — but they were caught by the `tsc --noEmit` step, which is a modest
+   argument for the step existing.
+2. **A fifth commit updated the README.** Moving the page into `wwwroot` silently
+   invalidated the local-run instructions: a fresh clone running `dotnet run` gets a
+   working API and a 404 at `/`, because nothing has built a page. The same commit records
+   the macOS port clash below.
+3. **The `MakeDir` fallback in the risk table was not needed** and was deliberately not
+   added — see below.
+
+### What the phase proved, beyond its checklist
+
+- **The arm64 → x64 lockfile crossing works.** The lockfile was resolved in this container
+  on linux-arm64 and installed by `npm ci` on a linux-x64 runner, which had to select
+  different per-platform binaries for Rolldown, Tailwind's Oxide and TypeScript out of the
+  optional dependencies. This was the phase's one genuinely untested step and it passed
+  first time.
+- **Tailwind 4 needs no configuration file at all.** Plugin plus one `@import` produced
+  correct utilities; there is no `tailwind.config.js` or `postcss.config.js` in the repo.
+- **`--ignore-scripts` costs nothing on this tree.** `fsevents` is the only package
+  declaring a lifecycle script and it is macOS-only; every native toolchain ships
+  per-platform binaries as optional dependencies instead. `npm audit` reported zero
+  vulnerabilities.
+
+### Learned, and not anticipated by this document
+
+- **A missing `wwwroot` fails in the opposite direction from the one assumed.** A genuinely
+  fresh build with no `wwwroot` boots fine: `/health` 200, `/scalar/` 200, `/` 404, no
+  exception. But a tree built *with* `wwwroot` and then stripped of it crashes at
+  `WebApplication.CreateBuilder` — **before any middleware runs** — with
+  `DirectoryNotFoundException` from `StaticWebAssetsLoader`, which reads the
+  `.staticwebassets.runtime.json` manifest generated at build time and constructs a file
+  provider for every content root it names. Not `UseStaticFiles`, and Development-only. No
+  fix was added: the failing state requires deleting a directory after building and is not
+  reachable by accident, so an MSBuild `MakeDir` target would be machinery guarding nothing.
+- **Port 5000 belongs to AirPlay Receiver on macOS.** Every check inside the container
+  passed while the host browser showed nothing, which reads as "the app is broken" rather
+  than "the host port is occupied". Cost real time; now in the README, because a reviewer
+  on a Mac hits it before anything else.
+- **The cold-start negotiate 500 did not reproduce.** Phase 1 established that the first
+  request after a deploy can arrive before the SDK has opened a server connection to the
+  service. This deploy's first load was already green. The window is real but not
+  guaranteed, so the README's guidance stands as "expect it, do not panic" rather than "it
+  always happens".
+- **Verification hygiene:** `setsid cmd &` followed by `kill -- -$!` does not stop the
+  process. `setsid` places the child in a *new* process group whose id is the child's own
+  pid, so the negative-pid kill matches nothing. This left stale servers holding 5000 and
+  5173, which then masked a failed rebind and made a stale process look like a fresh one.
+  Kill by the pid actually listening on the port.
+
+### Carried into later phases
+
+- **Phase 3:** the `docs/devcontainer-changes.md` rebuild for Changes A and B is now due —
+  this is the phase 2/3 boundary it was scheduled for. `node_modules` sits on the
+  `/workspace` bind mount and survives a rebuild.
+- **Phase 6:** the dev-server proxy already carries `ws: true` on `/hubs`, so the hub works
+  through HMR without further configuration. Phase 1's note still stands: the client must
+  tolerate a failed *initial* negotiate, which `withAutomaticReconnect()` does not cover.
+- **Phase 7:** static assets go in `src/frontend/public/`, never in `wwwroot`, which is
+  untracked build output cleared by `emptyOutDir` on every build.
