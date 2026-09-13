@@ -294,10 +294,17 @@ panel showed **Azure SignalR with an access token on the very first load after t
   provider for every content root it names. Not `UseStaticFiles`, and Development-only. No
   fix was added: the failing state requires deleting a directory after building and is not
   reachable by accident, so an MSBuild `MakeDir` target would be machinery guarding nothing.
-- **Port 5000 belongs to AirPlay Receiver on macOS.** Every check inside the container
-  passed while the host browser showed nothing, which reads as "the app is broken" rather
-  than "the host port is occupied". Cost real time; now in the README, because a reviewer
-  on a Mac hits it before anything else.
+- **A stale server process can make every check lie.** The browser showed nothing at
+  `http://localhost:5000` while `curl /health` inside the container returned 200. This was
+  first diagnosed as macOS AirPlay Receiver occupying port 5000 on the host. **That
+  diagnosis was wrong**, and the correction matters more than the original claim: the
+  process answering on 5000 was a survivor of the *missing-`wwwroot`* test above, which had
+  booted with no web root and so served `/health` at 200 and `/` at 404 for its entire life.
+  Restoring the directory on disk could not change that - a static file provider is built at
+  startup. The proof is that replacing the *container* process fixed it immediately, on the
+  same port and the same host. One bug - the verification-hygiene one below - not two.
+  *(The AirPlay note in the README stays. It is real macOS behaviour and a reviewer with
+  AirPlay Receiver enabled would hit it; it simply is not what happened here.)*
 - **The cold-start negotiate 500 did not reproduce.** Phase 1 established that the first
   request after a deploy can arrive before the SDK has opened a server connection to the
   service. This deploy's first load was already green. The window is real but not

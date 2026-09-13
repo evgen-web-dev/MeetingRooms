@@ -241,6 +241,26 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
   - `.config/dotnet-tools.json` committed, pinning `dotnet-ef`;
   - a startup `GetPendingMigrationsAsync()` guard that refuses to start outside
     Development when migrations are pending, so "I forgot" fails loudly.
+
+  > *Deferred 2026-09-13, at the phase 2/3 boundary.* The flip is **no longer scheduled**
+  > for the phase 3 → 4 boundary. `Database.Migrate()` at startup stays in place until it
+  > is actively replaced, which is safe for the reason already recorded above: the plan is
+  > a single App Service instance. Revisit only if phases 3-5 finish with time to spare -
+  > under a Monday-midday deadline, the flip is machinery competing with the graded core.
+  >
+  > The **dev-container half is already done**, so the flip costs no container rebuild
+  > whenever it happens: `sql-meetingrooms-test-task.database.windows.net` is in
+  > `init-firewall.sh` and verified reachable. What remains is Azure-side and code-side -
+  > the portal firewall rule for the host IP, the `ConnectionStrings:AzureSql` secret, and
+  > the pending-migrations startup guard.
+  >
+  > **One correction to the list above:** `.config/dotnet-tools.json` pinning `dotnet-ef`
+  > is *not* only a prerequisite of the flip. Phase 3 needs the tool to author the first
+  > migration at all (`dotnet ef migrations add`), so it is a phase 3 deliverable
+  > regardless. It must be a **local** tool manifest rather than a global install:
+  > `~/.dotnet/tools` lives on the container writable layer and does not survive a rebuild,
+  > whereas the manifest is in the repo and the tool package restores into the
+  > `~/.nuget/packages` named volume.
 - **No `UseHttpsRedirection` middleware.** App Service terminates TLS at its front
   end, so the app sees plain HTTP; without forwarded-headers configuration the
   middleware can redirect in a loop. The platform's **HTTPS Only** setting performs

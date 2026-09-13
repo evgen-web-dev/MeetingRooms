@@ -1,198 +1,147 @@
 # Dev container changes
 
-Two pending changes to `.devcontainer/`, which Claude cannot edit. Both activate on
-a **Rebuild Container**, so do them together, **before phase 3 starts**.
+Changes to `.devcontainer/`, which Claude cannot edit. This file is the record of what has
+been applied and what is still outstanding.
 
-- [ ] **Change A** - persist `dotnet user-secrets` across rebuilds (optional)
-- [ ] **Change B** - let the dev container reach Azure SQL (needed for the phase 3 -> 4
-      migration flip)
-
-The background for both is in `docs/decisions.md` under *Deployment and operations*.
-
-There is also a **Change C**, below, which is **not pending**: it is a contingency for
-reaching Azure SignalR from inside the container, written down during phase 1 and
-deliberately not applied. Do it only if a deploy's negotiate misbehaves.
-
-> **Read the corrected B5 before running `init-firewall.sh` by hand.** It previously
-> described the script as safe to re-run; inside a running container that can leave you
-> with no outbound network.
+**Status as of 2026-09-13 (the phase 2/3 boundary): everything needed is applied and
+verified.** One optional item remains, and it is Azure-side rather than container-side.
 
 ---
 
-## Change A - persist `dotnet user-secrets` across rebuilds
+## Applied 2026-09-13, in one rebuild
 
-**Why.** `dotnet user-secrets` writes to
-`~/.microsoft/usersecrets/<UserSecretsId>/secrets.json`. That path is not mounted, so
-it lives in the container's writable layer and is destroyed by every rebuild. From
-phase 3 on it holds the JWT signing key, the seed admin credentials, and - after the
-migration flip - the Azure SQL connection string.
+All four edits went in together and activated on a single **Rebuild Container**. Verified
+afterwards with the checks recorded under each.
 
-**Optional.** The cost of skipping it is re-adding those secrets after each rebuild.
+### 1. `dotnet user-secrets` survives rebuilds  *(was "Change A")*
 
-### A1. `.devcontainer/docker-compose.yml` - `app` service volumes
+**Why.** `dotnet user-secrets` writes to `~/.microsoft/usersecrets/<UserSecretsId>/`. That
+path was on the container's writable layer, which every rebuild destroys. From phase 3 on it
+holds the JWT signing key and the seed admin credentials.
 
-Before:
+- `.devcontainer/docker-compose.yml` — `dotnet-usersecrets:/home/containerdev/.microsoft`
+  added to the `app` service volumes, and `dotnet-usersecrets:` to the top-level block.
+- `.devcontainer/Dockerfile` — `/home/${USERNAME}/.microsoft` added to the `mkdir -p` and
+  `chown -R`. **Not optional:** a named volume mounted where the image has no directory is
+  created **root-owned**, and `dotnet user-secrets set` then fails with EACCES. Creating the
+  path in the image first means the fresh volume inherits `containerdev` ownership. This is
+  the same reason `.npm-global` and `.nuget` are pre-created.
 
-```yaml
-    volumes:
-      - ..:/workspace:cached
-      - claude-code-config:/home/containerdev/.claude
-      - claude-code-bashhistory:/commandhistory
-      - nuget-packages:/home/containerdev/.nuget/packages
-```
+*Verified:* directory owned by `containerdev`, write test passes.
 
-After:
+### 2. `node_modules` and the npm cache move off the host bind mount
 
-```yaml
-    volumes:
-      - ..:/workspace:cached
-      - claude-code-config:/home/containerdev/.claude
-      - claude-code-bashhistory:/commandhistory
-      - nuget-packages:/home/containerdev/.nuget/packages
-      - dotnet-usersecrets:/home/containerdev/.microsoft
-```
+**Why.** `/workspace` is a bind mount to the Mac, so `node_modules` was 92 MB of small files
+being written through the host filesystem. Moving it to a named volume keeps it out of the
+host tree entirely and off the slower I/O path. `~/.npm` came along for free: without it,
+every rebuild re-downloads the whole tree from the registry.
 
-### A2. `.devcontainer/docker-compose.yml` - top-level `volumes:` block
+- `.devcontainer/docker-compose.yml` — `frontend-node-modules:/workspace/src/frontend/node_modules`
+  and `npm-cache:/home/containerdev/.npm`, plus both names in the top-level block.
+- `.devcontainer/Dockerfile` — `/workspace/src/frontend/node_modules` added to the
+  `mkdir -p`, for the ownership reason in §1. `chown -R … /workspace` already covered it.
 
-Before:
+**The step that is easy to miss:** a new named volume starts **empty** and *shadows* the host
+directory rather than replacing it. The host copy must be deleted **before** the rebuild, or
+you end up with an empty `node_modules` in the container and the original 92 MB orphaned and
+invisible on the Mac. Afterwards, repopulate with `npm ci --ignore-scripts` — which installs
+the committed lockfile exactly, so the tree is identical rather than re-resolved.
 
-```yaml
-volumes:
-  claude-code-config:
-  claude-code-bashhistory:
-  nuget-packages:
-  mssql-data:
-```
+*Verified:* `/proc/mounts` shows `ext4`, not `/run/host_mark/Users`; owned by `containerdev`;
+`npm ci` and `npm run build` both succeed. The rebuilt bundle had **identical asset hashes**
+to the pre-rebuild build, which is a clean reproducibility check on the lockfile.
 
-After:
+**Consequence:** the container is now the only place `node_modules` exists. Opening this repo
+on the Mac outside the container leaves editor tooling with nothing to resolve against.
 
-```yaml
-volumes:
-  claude-code-config:
-  claude-code-bashhistory:
-  nuget-packages:
-  mssql-data:
-  dotnet-usersecrets:
-```
+**`bin/` and `obj/` were deliberately left on the bind mount.** Only ~6.7 MB across four
+projects, and moving them needs either a hardcoded path per project — which phase 5's test
+project would break — or an `ArtifactsPath` change relocating every build output immediately
+before the graded phases. Not worth the risk for the size.
 
-### A3. `.devcontainer/Dockerfile` - the `mkdir -p` / `chown -R` RUN (around line 61)
+### 3. Azure SignalR reachable from the container  *(was "Change C", a contingency)*
 
-**Not optional if you do A1/A2.** A named volume mounted at a path that does not exist
-in the image is created **owned by root**, and `dotnet user-secrets set` then fails
-with EACCES - the same class of problem as the `.npm-global` note already in that file.
+Promoted from contingency to applied. The original reason to defer was "do not do unneeded
+work", but the container was being rebuilt anyway, so the marginal cost was one line — and
+it removes a rebuild from the critical path if phase 6 misbehaves.
 
-Before:
+- `.devcontainer/init-firewall.sh` — `"signalr-meetingrooms.service.signalr.net"` added to
+  the domain loop, **above** the final entry, which carries the `; do`.
 
-```dockerfile
-RUN mkdir -p /workspace /home/${USERNAME}/.claude /home/${USERNAME}/.nuget/packages \
-      /home/${USERNAME}/.npm-global /home/${USERNAME}/.npm && \
-  chown -R ${USERNAME}:${USERNAME} /workspace /home/${USERNAME}/.claude \
-      /home/${USERNAME}/.nuget /home/${USERNAME}/.npm-global /home/${USERNAME}/.npm
-```
+**What it buys.** Negotiate has three outcomes (see the table in `README.md`); two of them —
+"connection string not read" and "read but no server connection" — look identical from a
+browser and have unrelated causes. Reaching the service from here separates "the connection
+string or the resource is wrong" from "App Service configuration is wrong".
 
-After:
+**What it does not buy.** It cannot test App Service's WebSockets setting, TLS termination,
+or whether a setting landed in the wrong portal tab. Those are Azure-side; only a deploy
+exercises them.
 
-```dockerfile
-RUN mkdir -p /workspace /home/${USERNAME}/.claude /home/${USERNAME}/.nuget/packages \
-      /home/${USERNAME}/.npm-global /home/${USERNAME}/.npm /home/${USERNAME}/.microsoft && \
-  chown -R ${USERNAME}:${USERNAME} /workspace /home/${USERNAME}/.claude \
-      /home/${USERNAME}/.nuget /home/${USERNAME}/.npm-global /home/${USERNAME}/.npm \
-      /home/${USERNAME}/.microsoft
-```
+*Verified:* port 443 reachable.
 
-### A4. Verify after the rebuild
+### 4. Azure SQL reachable from the container  *(the container half of "Change B")*
 
-```bash
-ls -ld /home/containerdev/.microsoft
-# must be owned by containerdev, not root
+- `.devcontainer/init-firewall.sh` — `"sql-meetingrooms-test-task.database.windows.net"`
+  added to the same loop, same position.
 
-touch /home/containerdev/.microsoft/.wtest && rm /home/containerdev/.microsoft/.wtest && echo OK
-```
+Taken now for the same reason as §3: `init-firewall.sh` is `COPY`d into the image
+(`Dockerfile:91`), so the running copy is baked in and a later edit would cost another
+rebuild. **The migration flip itself is deferred** — see `docs/decisions.md` — but the
+container side is now done, so it costs no rebuild whenever it happens.
 
-**Timing.** The rebuild that activates this also wipes the old writable layer. Do it
-before storing any secrets and nothing is ever lost.
+*Verified:* port 1433 reachable. Reachable is not the same as usable — Azure will still
+refuse the login until the outstanding item below is done.
+
+### Neither new domain was added to `REQUIRED`
+
+`REQUIRED=(…)` on line 69 aborts the whole script on a DNS failure, which would leave the
+firewall half-configured and the container with no network. Both new domains stay optional:
+a failed resolve only warns and stays blocked for that container's lifetime. If a probe ever
+reports BLOCKED, restart the container to re-resolve — that is expected behaviour, not a
+broken config.
 
 ---
 
-## Change B - let the dev container reach Azure SQL
+## Outstanding
 
-**Why.** Needed for the phase 3 -> 4 migration flip, when migrations start being applied
-from inside the container with `dotnet ef database update` instead of
-`Database.Migrate()` at startup. Not needed before that.
+### Azure SQL server firewall rule — only needed if the migration flip happens
 
-### B1. `.devcontainer/init-firewall.sh` - the domain loop (around line 76)
+SQL **server** → Security → Networking → add a firewall rule for **your host's public IP**.
+This is separate from "Allow Azure services", which covers the Web App, not your laptop.
 
-**Careful:** the final entry carries `; do`, so insert the new line *above* it.
+Deliberately **not** done, because the migration flip is deferred. Deferring also avoids its
+upkeep: the rule breaks whenever your ISP reassigns your address.
 
-Before:
+Two caveats that still apply when you do it:
 
-```bash
-for domain in \
-    "registry.npmjs.org" \
-    "api.anthropic.com" \
-    "sentry.io" \
-    "marketplace.visualstudio.com" \
-    "vscode.blob.core.windows.net" \
-    "update.code.visualstudio.com" \
-    "dist.nuget.org" \
-    "api.nuget.org" \
-    "globalcdn.nuget.org"; do
-```
+- **Leave the server's connection policy at `Default`.** From outside Azure that means
+  Proxy — all traffic through the regional gateway on 1433, which is the IP this allowlist
+  resolves. Under **Redirect**, clients connect to backend nodes on ports 11000-11999 at
+  addresses the ipset has never seen, and this approach stops working.
+- **Gateway IPs rotate.** The script resolves once per container start, so a rotation
+  mid-session presents as "it timed out and I changed nothing". Fix: restart the container.
 
-After:
+---
 
-```bash
-for domain in \
-    "registry.npmjs.org" \
-    "api.anthropic.com" \
-    "sentry.io" \
-    "marketplace.visualstudio.com" \
-    "vscode.blob.core.windows.net" \
-    "update.code.visualstudio.com" \
-    "dist.nuget.org" \
-    "api.nuget.org" \
-    "YOURSERVER.database.windows.net" \
-    "globalcdn.nuget.org"; do
-```
+## Reference: running `init-firewall.sh` by hand
 
-### B2. Do **not** add it to `REQUIRED` (around line 69)
+> **Re-running it inside a live container is not automatically safe.** It is safe from a
+> **fresh container start**, where chain policies are `ACCEPT`. Inside a running container it
+> is not.
 
-`REQUIRED=(...)` domains abort the whole script on a DNS failure, which would leave the
-firewall half-configured and the container with no network. Azure SQL stays optional:
-a failed resolve only warns and stays blocked. Leave that line untouched.
-
-### B3. No port rule needed
-
-The allow rule is `iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT`
-- all ports to allowed IPs. Port 1433 is covered automatically.
-
-### B4. Azure side (portal, one-time)
-
-SQL **server** -> Security -> Networking -> add a firewall rule for **your host's public
-IP**. This is separate from "Allow Azure services", which covers the Web App, not your
-laptop. The rule needs updating whenever your ISP reassigns your address.
-
-### B5. Test without a rebuild
-
-> **Corrected 2026-09-13 (phase 1).** This section previously said the script "destroys
-> and recreates its ipset on each run, so it is safe to run repeatedly". That is true
-> only from a **fresh container start**. Re-running it inside a **running** container
-> can take the container off the network. Read the warning below before running it.
-
-**Why re-running is not automatically safe.** `iptables -F` (line 9) deletes rules but
-**does not reset chain policies**. After any previous successful run the `OUTPUT` policy
-is already `DROP`, so the moment the script flushes, you have `OUTPUT DROP` with zero
-allow rules. The script re-adds only DNS, SSH and loopback (lines 28-38) and then, at
-line 44, runs:
+**Why.** `iptables -F` (line 9) deletes rules but **does not reset chain policies**. After any
+previous successful run the `OUTPUT` policy is already `DROP`, so the moment the script
+flushes you have `OUTPUT DROP` with zero allow rules. The script re-adds only DNS, SSH and
+loopback, and then at line 45 runs:
 
 ```bash
 gh_ranges=$(curl -s https://api.github.com/meta)
 ```
 
-That is outbound TCP 443, which nothing permits yet, so it returns empty and the script
-exits at its own `ERROR: Failed to fetch GitHub IP ranges` guard — **leaving the
-container with no outbound network.** On container start this never happens, because a
-fresh network namespace has policy `ACCEPT`.
+That is outbound TCP 443, which nothing permits yet, so it returns empty and the script exits
+at its own `ERROR: Failed to fetch GitHub IP ranges` guard — **leaving the container with no
+outbound network.** On container start this never happens, because a fresh network namespace
+has policy `ACCEPT`.
 
 **Restore the precondition the script assumes, then run it:**
 
@@ -201,111 +150,43 @@ sudo iptables -P INPUT ACCEPT; sudo iptables -P OUTPUT ACCEPT; sudo iptables -P 
 sudo bash /workspace/.devcontainer/init-firewall.sh
 ```
 
-This leaves the firewall open for the few seconds the script takes, which is acceptable
-as a deliberate, supervised action. **If it ever does abort mid-way, the recovery is the
-same three `-P ... ACCEPT` commands**, or stopping and starting the container.
+This leaves the firewall open for the few seconds the script takes, which is acceptable as a
+deliberate, supervised action. **If it ever aborts mid-way, the recovery is the same three
+`-P … ACCEPT` commands**, or stopping and starting the container.
 
-Then:
-
-```bash
-timeout 5 bash -c 'cat < /dev/null > /dev/tcp/YOURSERVER.database.windows.net/1433' \
-  && echo REACHABLE || echo BLOCKED
-```
-
-### B6. A rebuild is still required to make it stick
-
-`devcontainer.json` runs `sudo /usr/local/bin/init-firewall.sh` as `postStartCommand`,
-and the Dockerfile has `COPY init-firewall.sh /usr/local/bin/` (around line 91). **The
-script that runs on container start is the copy baked into the image**, so editing
-`.devcontainer/init-firewall.sh` has no effect until the image is rebuilt.
-
-### B7. Known caveats
-
-- **Leave the SQL server's connection policy at `Default`.** From outside Azure that
-  means Proxy - all traffic through the regional gateway on 1433, which is the IP this
-  allowlist resolves. Under **Redirect**, clients connect to backend nodes on ports
-  11000-11999 at addresses the ipset has never seen, and this approach stops working.
-- **Gateway IPs rotate.** The script resolves once per container start, so a rotation
-  mid-session presents as "it timed out and I changed nothing." Fix: restart the
-  container.
+**Editing the script requires a rebuild to take effect.** `devcontainer.json` runs
+`sudo /usr/local/bin/init-firewall.sh` as `postStartCommand`, and the Dockerfile has
+`COPY init-firewall.sh /usr/local/bin/` — the script that runs on container start is the copy
+baked into the image.
 
 ---
 
-## Change C (contingency only) - let the dev container reach Azure SignalR
+## Reference: what survives what
 
-**Do not do this pre-emptively.** Phase 1 deliberately skipped it: the deployed app is
-the definitive test of Azure SignalR, and it proved the service works. This entry exists
-so that *if* a future deploy's negotiate misbehaves, the bisection step is already
-written down.
+| What | Lives in | Window reopen | Container restart | **Rebuild** |
+|---|---|:---:|:---:|:---:|
+| Repo files, incl. `.devcontainer/*` | bind mount `/workspace` | yes | yes | yes |
+| `~/.claude`, `~/.nuget/packages`, `~/.microsoft`, `~/.npm`, `node_modules`, `/commandhistory`, `mssql-data` | named volumes | yes | yes | yes |
+| `~/.dotnet/tools`, anything else in `$HOME` | container writable layer | yes | yes | **no** |
+| iptables rules | kernel netns | yes | re-run by `postStartCommand` | re-run |
 
-**What it buys.** Negotiate has three outcomes (see the table in `README.md`). Two of
-them - "connection string not read" and "read but no server connection" - look alike
-from a browser and have unrelated causes. Reaching the service from inside the container
-separates "the connection string or the resource is wrong" from "App Service
-configuration or WebSockets is wrong", which the deployed app alone cannot do.
+Named volumes are removed only by `docker compose down -v` or deleting them by hand — not by
+Rebuild Container. Claude Code session transcripts live in `~/.claude/projects/`, so they
+survive a rebuild and can be reopened with `claude --resume`.
 
-**What it does not buy.** It cannot test App Service's WebSockets setting, TLS
-termination, or whether the setting landed in the *Application settings* tab rather than
-the *Connection strings* tab. Those are Azure-side and only a deploy exercises them.
-
-### C1. `.devcontainer/init-firewall.sh` - the domain loop
-
-Exactly as B1, and with the same warning: insert **above** the final entry, which carries
-the `; do`. The hostname is the `Endpoint=https://<name>.service.signalr.net` value from
-the Azure SignalR connection string - currently `signalr-meetingrooms.service.signalr.net`.
-
-```bash
-    "api.nuget.org" \
-    "signalr-meetingrooms.service.signalr.net" \
-    "globalcdn.nuget.org"; do
-```
-
-**Do not add it to `REQUIRED`**, for the reason in B2: a DNS failure there aborts the
-script, and per the corrected B5 that can leave the container with no network.
-
-### C2. Apply and check
-
-Follow the corrected procedure in **B5** - reset the chain policies first, then run the
-script. Then:
-
-```bash
-timeout 5 bash -c 'cat < /dev/null > /dev/tcp/signalr-meetingrooms.service.signalr.net/443' \
-  && echo REACHABLE || echo BLOCKED
-```
-
-No port rule is needed; the allow rule matches all ports to allowed IPs, and the SDK
-connects over `wss://` on 443.
-
-### C3. Run the app with the real connection string
-
-Start it from **your own terminal**, not through Claude, so the connection string never
-enters a transcript:
-
-```bash
-Azure__SignalR__ConnectionString='<paste>' ASPNETCORE_URLS=http://0.0.0.0:5000 \
-  dotnet run --project src/backend/MeetingRooms.Api --no-launch-profile
-```
-
-Success is `POST /hubs/schedule/negotiate?negotiateVersion=1` returning a `url`
-containing `.service.signalr.net` plus an `accessToken`. Allow a few seconds after
-startup: the SDK must establish a server connection first, and until it does, negotiate
-returns the cold-start 500 described in `README.md`.
-
-### C4. Caveats
-
-- **This is temporary unless you rebuild.** Per B6, the script that runs on container
-  start is the copy baked into the image. Fine for a contingency test; if it turns out
-  you want it permanently, fold it in alongside Change B, which needs a rebuild anyway.
-- **Endpoint IPs rotate.** The script resolves DNS once per run, so a rotation
-  mid-session presents as "it worked, then stopped". Re-run the script.
+**The design rule this implies:** prefer the repo over the container. Anything under
+`/workspace` survives unconditionally. That is why the `dotnet-ef` tool is a **local** tool
+manifest (`.config/dotnet-tools.json`, committed) rather than a global install — see
+`docs/decisions.md`.
 
 ## How the pieces activate
 
-- `postStartCommand` fires on container **start**, not on reopening the VS Code window.
-  If the container never stopped, nothing re-runs.
-- Editing `docker-compose.yml` has **no effect on the running container** - mounts are
-  fixed at container creation. The current container keeps working unchanged until it
-  is recreated.
-- Changing the Dockerfile or `init-firewall.sh` needs a full **image rebuild**; changing
-  only `docker-compose.yml` volumes needs a **recreate**. "Rebuild Container" in the Dev
-  Containers extension covers both.
+- `postStartCommand` fires on container **start**, not on reopening the VS Code window. If
+  the container never stopped, nothing re-runs.
+- Editing `docker-compose.yml` has **no effect on the running container** — mounts are fixed
+  at container creation.
+- Changing the Dockerfile or `init-firewall.sh` needs a full **image rebuild**; changing only
+  `docker-compose.yml` volumes needs a **recreate**. "Rebuild Container" covers both.
+- Every named volume needs **two** entries: the mount on the service, and a declaration in
+  the top-level `volumes:` block. Referencing one without declaring it makes Compose refuse
+  to start the project.
