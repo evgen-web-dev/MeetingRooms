@@ -58,10 +58,12 @@ RUN mkdir /commandhistory && touch /commandhistory/.bash_history && \
 
 # .npm-global exists because npm's default global prefix is /usr/local (root-owned),
 # so `npm i -g` and some npx paths fail with EACCES as the non-root user.
-RUN mkdir -p /workspace /home/${USERNAME}/.claude /home/${USERNAME}/.nuget/packages \
-      /home/${USERNAME}/.npm-global /home/${USERNAME}/.npm && \
+RUN mkdir -p /workspace /workspace/src/frontend/node_modules \
+      /home/${USERNAME}/.claude /home/${USERNAME}/.nuget/packages \
+      /home/${USERNAME}/.npm-global /home/${USERNAME}/.npm /home/${USERNAME}/.microsoft && \
   chown -R ${USERNAME}:${USERNAME} /workspace /home/${USERNAME}/.claude \
-      /home/${USERNAME}/.nuget /home/${USERNAME}/.npm-global /home/${USERNAME}/.npm
+      /home/${USERNAME}/.nuget /home/${USERNAME}/.npm-global /home/${USERNAME}/.npm \
+      /home/${USERNAME}/.microsoft
 
 WORKDIR /workspace
 

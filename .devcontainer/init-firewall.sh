@@ -83,6 +83,8 @@ for domain in \
     "update.code.visualstudio.com" \
     "dist.nuget.org" \
     "api.nuget.org" \
+    "signalr-meetingrooms.service.signalr.net" \
+    "sql-meetingrooms-test-task.database.windows.net" \
     "globalcdn.nuget.org"; do
     echo "Resolving $domain..."
     ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}' || true)

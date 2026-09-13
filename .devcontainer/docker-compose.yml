@@ -19,6 +19,9 @@ services:
       - claude-code-config:/home/containerdev/.claude
       - claude-code-bashhistory:/commandhistory
       - nuget-packages:/home/containerdev/.nuget/packages
+      - dotnet-usersecrets:/home/containerdev/.microsoft
+      - frontend-node-modules:/workspace/src/frontend/node_modules
+      - npm-cache:/home/containerdev/.npm
     command: sleep infinity
     depends_on:
       - db
@@ -53,3 +56,6 @@ volumes:
   claude-code-bashhistory:
   nuget-packages:
   mssql-data:
+  dotnet-usersecrets:
+  frontend-node-modules:
+  npm-cache:
