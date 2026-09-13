@@ -1,6 +1,7 @@
 using MeetingRooms.Api;
 using MeetingRooms.Api.Filters;
 using MeetingRooms.Api.Hubs;
+using MeetingRooms.Api.OpenApi;
 using MeetingRooms.Application;
 using MeetingRooms.Infrastructure;
 using MeetingRooms.Infrastructure.Persistence;
@@ -13,7 +14,12 @@ var builder = WebApplication.CreateBuilder(args);
 // One filter registration covers every endpoint, so no controller can forget to validate.
 builder.Services.AddControllers(options => options.Filters.Add<AsyncValidationFilter>());
 builder.Services.AddExceptionHandlersWithProblemDetails();
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options =>
+{
+    // The scheme itself, and then the per-operation requirement that points at it.
+    options.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
+    options.AddOperationTransformer<AuthorizedOperationTransformer>();
+});
 builder.Services.AddRealtime(builder.Configuration);
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructurePersistence(builder.Configuration);
@@ -64,6 +70,10 @@ app.MapScalarApiReference(options =>
     options.DisableTelemetry();
     options.DisableAgent();
     options.DisableDefaultFonts();
+
+    // Preselects the scheme the document declares, so the Authorize control is ready to take
+    // a token rather than asking which of several schemes is meant.
+    options.AddPreferredSecuritySchemes(BearerSecuritySchemeTransformer.SchemeName);
 });
 
 app.MapControllers();
