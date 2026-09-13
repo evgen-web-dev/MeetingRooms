@@ -1,4 +1,5 @@
 using MeetingRooms.Api;
+using MeetingRooms.Api.Filters;
 using MeetingRooms.Api.Hubs;
 using MeetingRooms.Application;
 using MeetingRooms.Infrastructure;
@@ -6,7 +7,8 @@ using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
+// One filter registration covers every endpoint, so no controller can forget to validate.
+builder.Services.AddControllers(options => options.Filters.Add<AsyncValidationFilter>());
 builder.Services.AddExceptionHandlersWithProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.AddRealtime(builder.Configuration);
@@ -14,6 +16,7 @@ builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructurePersistence(builder.Configuration);
 builder.Services.AddInfrastructureServices();
 builder.Services.AddJwtAuthentication(builder.Configuration);
+builder.Services.AddAppValidation();
 
 // The composition root owns the clock. Nothing below reads DateTime.UtcNow directly,
 // so time can be substituted in a test without reaching for a static.

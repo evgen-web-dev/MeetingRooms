@@ -1,3 +1,4 @@
+using FluentValidation;
 using MeetingRooms.Api.Errors;
 using MeetingRooms.Api.ExceptionHandlers;
 using MeetingRooms.Application.Auth;
@@ -162,6 +163,18 @@ public static class DependencyInjectionExtensions
             .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme);
 
         services.AddAuthorization();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers every validator in this assembly. Scanned rather than listed, so adding a
+    /// validator is adding a file - and a request type whose validator was never registered
+    /// would otherwise pass validation silently.
+    /// </summary>
+    public static IServiceCollection AddAppValidation(this IServiceCollection services)
+    {
+        services.AddValidatorsFromAssembly(typeof(DependencyInjectionExtensions).Assembly);
 
         return services;
     }
