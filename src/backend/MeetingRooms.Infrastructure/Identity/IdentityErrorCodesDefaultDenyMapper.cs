@@ -69,9 +69,14 @@ internal static class IdentityErrorCodesDefaultDenyMapper
     {
         var mapped = new List<string>();
 
+        // Distinct, and in the order Identity reported them. The user name is the email
+        // address, so a duplicate registration fails as DuplicateUserName *and* DuplicateEmail,
+        // and both translate to one code - which would otherwise reach the client twice.
+        var alreadyMapped = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var error in errors)
         {
-            if (map.TryGetValue(error.Code, out var replacement))
+            if (map.TryGetValue(error.Code, out var replacement) && alreadyMapped.Add(replacement ?? error.Code))
             {
                 mapped.Add(replacement ?? error.Code);
             }
