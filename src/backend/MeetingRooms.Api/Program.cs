@@ -3,6 +3,9 @@ using MeetingRooms.Api.Filters;
 using MeetingRooms.Api.Hubs;
 using MeetingRooms.Application;
 using MeetingRooms.Infrastructure;
+using MeetingRooms.Infrastructure.Persistence;
+using MeetingRooms.Infrastructure.Seeders;
+using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -23,6 +26,18 @@ builder.Services.AddAppValidation();
 builder.Services.AddSingleton(TimeProvider.System);
 
 var app = builder.Build();
+
+// Schema first, then reference data, then the account that needs it: seeding a role into a
+// database with no tables fails, and an administrator cannot be granted a role that does not
+// exist yet. Applying migrations on start is safe because the deployment is a single instance
+// - see docs/decisions.md - and every step below is idempotent, so a restart is a no-op.
+await using (var startupScope = app.Services.CreateAsyncScope())
+{
+    await startupScope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
+
+    await IdentitySeeder.SeedRolesAsync(startupScope.ServiceProvider);
+    await IdentitySeeder.SeedAdminAsync(startupScope.ServiceProvider, app.Environment.IsDevelopment());
+}
 
 // First in the pipeline, so it sees every exception thrown by anything below it.
 app.UseExceptionHandler();

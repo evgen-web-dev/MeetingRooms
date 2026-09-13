@@ -1,4 +1,5 @@
 using MeetingRooms.Application.Interfaces;
+using MeetingRooms.Application.Options;
 using MeetingRooms.Domain.Entities;
 using MeetingRooms.Infrastructure.Identity;
 using MeetingRooms.Infrastructure.Persistence;
@@ -48,6 +49,11 @@ public static class DependencyInjectionExtensions
             })
             .AddRoles<IdentityRole<int>>()
             .AddEntityFrameworkStores<AppDbContext>();
+
+        // Bound but not validated at startup: an absent administrator is legal in Development
+        // and fatal outside it, which is a distinction ValidateOnStart cannot express. The
+        // seeder decides.
+        services.AddOptions<SeedOptions>().Bind(configuration.GetSection(SeedOptions.SectionName));
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
 
