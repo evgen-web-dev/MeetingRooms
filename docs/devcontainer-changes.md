@@ -104,13 +104,23 @@ broken config.
 
 ## Outstanding
 
-### Azure SQL server firewall rule — only needed if the migration flip happens
+### Azure SQL server firewall rule
 
 SQL **server** → Security → Networking → add a firewall rule for **your host's public IP**.
 This is separate from "Allow Azure services", which covers the Web App, not your laptop.
 
-Deliberately **not** done, because the migration flip is deferred. Deferring also avoids its
-upkeep: the rule breaks whenever your ISP reassigns your address.
+**Confirmed needed, 2026-09-14.** The dev container and the Mac leave through the same address,
+and Azure names it in the error when either tries to connect:
+
+```
+Cannot open server 'sql-meetingrooms-test-task' requested by the login.
+Client with IP address '<your public IP>' is not allowed to access the server.
+```
+
+Wanted for two things, neither urgent: the deferred migration flip, and inspecting the deployed
+database by hand - `dotnet ef migrations list --connection ...` from here, or DataGrip/Rider
+from the Mac. Still deferred by choice, which also avoids its upkeep: the rule breaks whenever
+the ISP reassigns the address.
 
 Two caveats that still apply when you do it:
 
@@ -120,6 +130,38 @@ Two caveats that still apply when you do it:
   addresses the ipset has never seen, and this approach stops working.
 - **Gateway IPs rotate.** The script resolves once per container start, so a rotation
   mid-session presents as "it timed out and I changed nothing". Fix: restart the container.
+
+---
+
+
+### Certificate revocation endpoints, for connecting to Azure SQL from here
+
+Only needed alongside the rule above, and only for connections made **from the container**.
+
+```
+crl3.digicert.com:80  BLOCKED
+ocsp.digicert.com:80  BLOCKED
+```
+
+`Microsoft.Data.SqlClient` checks certificate revocation during the TLS handshake. The root it
+needs is installed (`DigiCert_Global_Root_G2.pem`), but neither revocation endpoint is on the
+allowlist, so the fetch hangs until it gives up - somewhere between 25 and 60 seconds. A normal
+connection timeout expires first, and the failure is reported as
+`error: 35 - An internal exception was caught`, whose inner exception is
+`Win32Exception (258): The connection attempt timed out` - naming neither certificates nor the
+firewall. Raw TCP to port 1433 connects in 50 ms throughout, which makes the message actively
+misleading.
+
+- **Workaround, no rebuild:** `TrustServerCertificate=True` **and** `Connection Timeout=60`.
+  Trusting the certificate decides the outcome once the fetch gives up; the long timeout is what
+  survives the wait. Verified 2026-09-14: with both, a deliberately wrong login reached the
+  server and was rejected as `Login failed for user`, which is the whole path working.
+- **Proper fix:** add `crl3.digicert.com` and `ocsp.digicert.com` to the domain loop in
+  `.devcontainer/init-firewall.sh`, which costs a rebuild and removes both the stall and the
+  need to skip validation.
+
+Neither affects the deployed application, whose egress is unrestricted, nor the local `db`
+container, which is reached without TLS.
 
 ---
 
