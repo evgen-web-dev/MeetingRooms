@@ -518,17 +518,163 @@ On the deployed app:
 
 ## Done when
 
-- [ ] `InitialIdentity` exists and is applied locally and in Azure.
-- [ ] Register → login → `/me` works end to end, locally and deployed.
-- [ ] The seeded admin's `/me` reports `["Admin"]`.
-- [ ] Unknown email and wrong password are indistinguishable at login.
-- [ ] A duplicate registration is a 409 carrying `EmailAlreadyRegistered`.
-- [ ] A malformed payload is a `ValidationProblemDetails`; an Identity policy failure is a
+- [x] `InitialIdentity` exists and is applied locally and in Azure.
+- [x] Register → login → `/me` works end to end, locally and deployed.
+- [x] The seeded admin's `/me` reports `["Admin"]`.
+- [x] Unknown email and wrong password are indistinguishable at login.
+- [x] A duplicate registration is a 409 carrying `EmailAlreadyRegistered`.
+- [x] A malformed payload is a `ValidationProblemDetails`; an Identity policy failure is a
       `ProblemDetails` with Identity's codes.
-- [ ] `/me` without a token is 401; the body is empty by decision.
-- [ ] A second startup applies no migrations and seeds nothing.
-- [ ] `dotnet build` has zero warnings.
-- [ ] Phase 2's surface — page, Scalar, OpenAPI, the `/api` 404, negotiate — is unchanged.
+- [x] `/me` without a token is 401; the body is empty by decision.
+- [x] A second startup applies no migrations and seeds nothing.
+- [x] `dotnet build` has zero warnings.
+- [x] Phase 2's surface — page, Scalar, OpenAPI, the `/api` 404, negotiate — is unchanged.
+
+*All ten closed 2026-09-14. One carries a qualifier: "applied in Azure" is proven by
+necessity rather than by inspection - `MigrateAsync()` runs before `app.Run()` and throws on
+failure, so an application that boots is proof it succeeded, and every later restart re-reads
+`__EFMigrationsHistory` to decide there is nothing to do. Reading that table directly needs the
+Azure SQL firewall rule still listed as outstanding in `docs/devcontainer-changes.md`.*
 
 **Deploy after this phase:** yes — and the three Azure Application settings must exist
 *before* the merge to `main`.
+
+## Outcome
+
+**Completed and deployed 2026-09-14.** Every task done, every Done-when item closed, and the
+exit criterion met: the deployed application authenticates. Seventeen planned commits became
+sixteen - three tasks collapsed where they shared files - plus three unplanned ones, each
+listed below.
+
+### Verified
+
+Locally, from the committed tree: `dotnet build` with zero warnings at every step;
+`InitialIdentity` applied and listed as applied; register → login → `/me` returning
+`roles: ["User"]`; the seeded administrator returning `roles: ["Admin"]`; a duplicate
+registration as a single `EmailAlreadyRegistered` at 409; a weak password as a 400 carrying
+Identity's own codes; a malformed payload as a `ValidationProblemDetails` **identical in shape
+to the one MVC produces for a model-binding failure**; `/me` without a token as a 401 with an
+empty body and `WWW-Authenticate: Bearer`; unknown email and wrong password as byte-identical
+responses but for the trace id; and a second startup applying no migrations and seeding nothing.
+Phase 2's surface was unchanged throughout: `/`, `/scalar/`, `/openapi/v1.json`, the SPA
+fallback, the `/api/<unmatched>` 404 and in-process negotiate.
+
+Twice more than planned, because neither had been exercised:
+
+- **The published Release build, in Production, configured only through environment variables**
+  - which is exactly how App Service supplies settings, and a path no Development run touches
+  since user-secrets are not loaded outside Development. It booted, seeded, served Scalar and
+  the OpenAPI document, and logged a seeded administrator in.
+- **A from-scratch database.** The local database had been incremental since the first
+  migration, so it was dropped and recreated: one migration applied, two roles inserted, the
+  administrator seeded, and register/login/`/me` working - the sequence Azure would run minutes
+  later.
+
+On the deployed app: it boots, which alone proves the signing key reached Application settings
+and that Azure SQL is reachable, since both now gate startup. `/health` reports
+`databaseReachable: true`; register, login and `/me` work for a new user and for the seeded
+administrator, with the right roles in each payload; Scalar shows the lock icon on the gated
+endpoint and a bearer field carrying this document's description; and the realtime panel is
+still green.
+
+### Deviations from the plan
+
+1. **`IUnitOfWork` moved from task 6 into task 4.** The plan put the port one commit after its
+   only implementation, which does not compile.
+2. **`ExecuteInTransactionAsync` gained a `where TResult : OperationResult` constraint** and
+   commits only on a succeeded result. The plan's shape had a hole: `UserManager` saves as it
+   goes, so a failure that is *returned* rather than thrown - the way this codebase reports
+   expected failures - would have committed the orphan user the transaction exists to prevent.
+3. **The claim-type constants live in Application**, not on the token service. Both the issuing
+   adapter and the API host need them, and the API reaching into a concrete Infrastructure class
+   for a wire contract is the wrong dependency.
+4. **`ClockSkew` is 30 seconds rather than two minutes.** Skew absorbs a difference between the
+   issuing and validating clocks; here they are one process.
+5. **The login validator also caps lengths**, which the plan gave only to registration: the
+   password is hashed before it can be rejected, so an unbounded one is work an unauthenticated
+   caller can demand.
+6. **Two Identity user options the plan did not name:** `RequireUniqueEmail`, and an empty
+   `AllowedUserNameCharacters` - see below.
+7. **`IsInRoleAsync` was added to the user port**, so the administrator seeder can be idempotent
+   by asking rather than by parsing `UserAlreadyInRole` out of an error list.
+8. **The `/health` probe went behind a port** rather than injecting `AppDbContext` into a
+   controller, which `docs/decisions.md` rules out, and carries its own three-second timeout.
+9. **Tasks 7, 8 and 9 became two commits**, because the DI files they share would otherwise have
+   needed interactive staging.
+10. **Three unplanned commits:** the duplicate-error-code fix, the README's secrets section, and
+    the early options validation. The second and third are recorded below.
+
+### What the phase proved, beyond its checklist
+
+- **The `NU1605` phase 1 predicted did not occur.** `Microsoft.Azure.SignalR` reaches
+  `Microsoft.IdentityModel.Abstractions` 6.35.0 through `Azure.Identity`, JwtBearer pins the
+  8.19.2 line, and highest-wins resolves the whole graph to 8.19.2 - confirmed in
+  `project.assets.json` rather than assumed from a clean build.
+- **`JsonWebTokenHandler` writes claim types verbatim.** The short names survive into the token
+  unchanged - `sub`, `email`, `role` - with no outbound URI mapping of the kind
+  `JwtSecurityTokenHandler` applies. This was an assumption the plan flagged for verification.
+- **The framework's validation shape and ours are identical by construction.** A rule failure
+  and a missing-field model-binding failure return the same `type`, the same title and the same
+  `errors` dictionary, because both come from MVC's own `ProblemDetailsFactory`.
+
+### Learned, and not anticipated by this document
+
+- **`ValidateOnStart` fires after the migrate-and-seed block, not before it.** It runs when the
+  *host* starts, and that block runs between `builder.Build()` and `app.Run()`. A deployment
+  with a bad signing key therefore applied migrations and seeded an administrator before
+  refusing to serve anything, and reported the seeder's complaint first when more than one
+  setting was missing. Fixed by resolving the options explicitly ahead of the block. Found only
+  by running the published build in Production.
+- **A default-deny error map can return nothing, and nothing is not a legal failure.**
+  `OperationResult.Failure` rejects an empty error list, so an Identity failure whose codes were
+  all dropped would have thrown `ArgumentException` from the failure path itself. Unmapped
+  failures now carry `UnexpectedError`. The reference project has the same shape and the same
+  latent hazard.
+- **A duplicate registration fails twice.** With the user name set to the email address,
+  Identity reports `DuplicateUserName` *and* `DuplicateEmail`, so one error code reached the
+  client twice until the map was made to de-duplicate.
+- **`UserManager.AddToRoleAsync` throws for a role that does not exist** rather than returning a
+  failed `IdentityResult` - so a registration before the roles were seeded arrived as a 500,
+  correctly, through the global handler. That accident became the proof that the unit of work
+  rolls back: registering the same address again after seeding returned 201, not 409.
+- **`/me` does not prove the role wiring, though it looks like it does.** It reads the `role`
+  claim type directly, while `[Authorize(Roles = ...)]` goes through `ClaimsPrincipal.IsInRole`
+  and the identity's configured `RoleClaimType` - different code paths. Proved instead with a
+  temporary `[Authorize(Roles = Admin)]` on `/me`: a User token got 403, an Admin token 200, and
+  the attribute was reverted.
+- **An `OpenApiSecuritySchemeReference` built without its host document serialises as `{}`.**
+  The code compiled, the document generated, and the requirement silently said "secured by
+  nothing". Caught by reading the generated JSON, which is the only place it shows.
+- **Identity's default `AllowedUserNameCharacters` is narrower than a legal email address** - no
+  apostrophes, for instance - so with the user name set to the email it would reject addresses
+  the request validator accepts. Disabled, since the validator owns that check.
+- **`dotnet new tool-manifest` wrote `dotnet-tools.json` at the repository root**, not
+  `.config/dotnet-tools.json`. Both resolve, only one is conventional; moved.
+- **`dotnet add package` already writes `PrivateAssets` for a development dependency**, so the
+  manual edit this document promised for `Microsoft.EntityFrameworkCore.Design` was unnecessary.
+- **Verification hygiene, twice over.** `dotnet user-secrets list` returns nothing while the
+  application holds its build output, which silently produced an empty password and a misleading
+  401; and a `pkill -f` pattern matches the command line invoking it, killing the shell. Read
+  secrets before starting the app, and kill by a pattern that cannot match the caller.
+
+### Carried into later phases
+
+- **Phase 4:** the startup warning that no `IEntityTypeConfiguration` was found disappears with
+  the first one. `[Authorize(Roles = ...)]` gets its first real endpoint - the mechanism is
+  proven, but nothing in the deployed application is role-gated yet. `AppUser` gains its slot
+  navigation.
+- **Phase 5:** the booking write does **not** use `IUnitOfWork`. `ExecuteUpdateAsync` is one
+  statement and needs no transaction; the unit of work exists for registration's two writes.
+- **Phase 6:** the hub must read the token from the `access_token` query-string parameter, since
+  browsers cannot set headers on a WebSocket - `docs/decisions.md` says how. The SignalR
+  resource's metrics and live trace become worth opening then, once there are client connections
+  and broadcasts to watch; negotiate alone has told us everything it can.
+- **Phase 7:** `/api/auth/me` gives the frontend the caller's id, email and roles without
+  decoding a JWT client-side, and login returns `expiresAtUtc` so a session end can be seen
+  coming.
+- **Phase 8:** the README still carries TODOs for *Architecture* and *Concurrency*, and
+  `docs/devcontainer-changes.md` now carries two outstanding items rather than one, both
+  confirmed by trying to reach the deployed database on 2026-09-14: the Azure SQL firewall rule
+  for the host's public IP, and the certificate-revocation endpoints the container's allowlist
+  blocks. Neither affects the deployed application; both stand between this container and a
+  direct look at the Azure database.
