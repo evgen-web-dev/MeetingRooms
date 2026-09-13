@@ -1,6 +1,8 @@
 using MeetingRooms.Application.Interfaces;
 using MeetingRooms.Domain.Entities;
+using MeetingRooms.Infrastructure.Identity;
 using MeetingRooms.Infrastructure.Persistence;
+using MeetingRooms.Infrastructure.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -31,11 +33,35 @@ public static class DependencyInjectionExtensions
         // the bearer scheme: every [Authorize] endpoint starts answering with a redirect to a
         // login page that does not exist. AddIdentityCore registers UserManager, the password
         // hasher and the validators, and no authentication scheme at all.
-        services.AddIdentityCore<AppUser>()
+        services.AddIdentityCore<AppUser>(options =>
+            {
+                // The password policy is left at Identity's defaults on purpose - see
+                // docs/phases/phase-3-persistence-identity.md. These two are user options, and
+                // both exist because the user name here *is* the email address.
+                options.User.RequireUniqueEmail = true;
+
+                // Identity's default allow-list is narrower than the characters an email address
+                // may legally contain, so an address with an apostrophe would be rejected as an
+                // invalid user name. The email itself is validated by the request validator, so
+                // this check has nothing left to add.
+                options.User.AllowedUserNameCharacters = string.Empty;
+            })
             .AddRoles<IdentityRole<int>>()
             .AddEntityFrameworkStores<AppDbContext>();
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the implementations of the Application layer's infrastructure ports.
+    /// </summary>
+    public static IServiceCollection AddInfrastructureServices(this IServiceCollection services)
+    {
+        services.AddScoped<IUserIdentityService, UserIdentityService>();
+        services.AddScoped<IRoleIdentityService, RoleIdentityService>();
+        services.AddScoped<IAccessTokenService, JsonWebTokenService>();
 
         return services;
     }
