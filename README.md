@@ -15,80 +15,43 @@ reaches every viewer in real time.
 
 ---
 
-## Running it locally
+## For the reviewer
 
-Everything runs inside the dev container; there is no host setup.
+**Using the deployed application.** Open it and register. An account created this way receives
+the `User` role, which is sufficient to browse rooms, view any room's schedule and book a free
+slot. Opening a second browser on the same room demonstrates the real-time behaviour: booking in
+one updates the other without a refresh. **Admin credentials are supplied with the submission
+links**, as self-registration cannot grant `Admin` by design and the seeded account's password is
+not held in this repository.
 
-The frontend is built by Vite into the API's `wwwroot`, so build it once before the first
-run. Without this the API works but `/` returns 404, because there is no page to serve:
+**Verifying the concurrency guarantee.** Two commands and approximately one minute — see
+[Running the concurrency test](#running-the-concurrency-test). It needs the .NET SDK and
+Docker, and nothing else: no Node, no frontend build, and no configuration of your own. That
+section also sets out a **mutation probe**, which demonstrates that the test fails when the
+guarantee is removed.
 
-```bash
-cd src/frontend && npm ci --ignore-scripts && npm run build
-```
+**Reading the implementation.** Three files, in a suggested order:
 
-The API also needs a JWT signing key before it will start. It is validated at startup, so a
-missing or too-short key stops the application rather than failing on the first login:
+| | |
+|---|---|
+| `src/backend/MeetingRooms.Infrastructure/Persistence/Repositories/SlotRepository.cs` | `TryClaimAsync` — the entire no-double-booking mechanism is one `WHERE` clause, and the reasoning is in the XML comment above it |
+| `tests/MeetingRooms.ConcurrencyTests/SlotBookingConcurrencyTests.cs` | twenty simultaneous requests at one slot, and what is asserted about them |
+| `CLAUDE.md` and `docs/` | how this was built with Claude Code — the working agreement, the binding decisions, and one document per phase, each written *before* its implementation and closed with an honest outcome |
 
-```bash
-openssl rand -base64 32          # 32 bytes is the minimum the app accepts
-
-cd src/backend/MeetingRooms.Api
-dotnet user-secrets set 'Jwt:SigningKey' '<the base64 value>'
-```
-
-The seeded administrator is optional in Development - without it the app logs a warning and
-starts with no admin account - and required in every other environment:
-
-```bash
-dotnet user-secrets set 'Seed:AdminEmail' 'admin@example.com'
-dotnet user-secrets set 'Seed:AdminPassword' '<password>'
-```
-
-The password has to satisfy ASP.NET Core Identity's default policy: at least six characters,
-with an uppercase letter, a lowercase letter, a digit and a non-alphanumeric character. **Use
-single quotes** - inside double quotes the shell expands `$`, and what gets stored is not what
-you typed.
-
-These values live in `dotnet user-secrets` locally and in App Service application settings in
-Azure. They are never in `appsettings.json` and never in git.
-
-Then, from the repository root:
-
-```bash
-dotnet run --project src/backend/MeetingRooms.Api
-```
-
-That serves on <http://localhost:5000>. The database connection string is supplied by the
-`ConnectionStrings__DefaultConnection` environment variable, already set in the container
-and pointing at the `db` service (SQL Server, database `MeetingRooms`).
-
-> **On macOS, port 5000 belongs to AirPlay Receiver.** The container binds it correctly and
-> `curl` inside the container works, but the forwarded port on the host resolves to Apple's
-> service instead, so the browser shows nothing useful. Either switch AirPlay Receiver off
-> (System Settings → General → AirDrop & Handoff), or remap the host side: VS Code's
-> **Ports** panel → *Change Local Address Port* on 5000.
-
-For frontend work, `npm run dev` in `src/frontend` serves on <http://localhost:5173> with
-hot reload, proxying `/api`, `/health` and `/hubs` to the API — so run both.
-
-Two things cannot be exercised from inside the dev container, because its outbound
-firewall allows only GitHub, npm, NuGet and Anthropic:
-
-- **Azure SQL** — the local `db` container is used instead.
-- **Azure SignalR** (`*.service.signalr.net`) — SignalR falls back to running in-process,
-  which is correct locally. See *Diagnosing the realtime transport* below.
+Prose versions of the first two are below, under [Concurrency](#concurrency) and
+[Architecture](#architecture).
 
 ## Running the concurrency test
 
-The test assignment #6 asks for is `tests/MeetingRooms.ConcurrencyTests`. It drives the **real
+The test required by assignment #6 is `tests/MeetingRooms.ConcurrencyTests`. It drives the **real
 application** over HTTP through `WebApplicationFactory` — real controllers, real EF Core, real
 Identity, real JWT — against a **real SQL Server**, and fires twenty simultaneous
 `POST /api/bookings` at one slot from twenty different accounts. An in-memory or SQLite provider
 would make the guarantee untestable, since it is the database's row lock that enforces it.
 
-### What you need
+### Prerequisites
 
-Less than you would expect:
+The test requires only the following.
 
 - **.NET SDK 10.0.100 or later.** There is no `global.json`, so any 10.x SDK works.
 - **Docker**, running — Docker Desktop on Windows or macOS, Docker Engine on Linux.
@@ -125,7 +88,7 @@ whatever is configured and replaces only the catalog. That is not tidiness: book
 cancelled, so a run against the development database would permanently consume demo slots.
 
 <details>
-<summary><b>If something goes wrong</b> — port 1433, Apple silicon, older Compose</summary>
+<summary><b>Troubleshooting</b> — port 1433, Apple silicon, older Compose versions</summary>
 
 | Symptom | Cause, and what to do |
 |---|---|
@@ -165,17 +128,18 @@ identical one-and-nineteen result and would otherwise pass for the wrong reason.
 accounts, rather than one caller repeating itself, because a caller who already holds a slot is
 answered `201` by design.
 
-### The mutation probe — please run this one
+### The mutation probe
 
-A green test proves nothing on its own. Break the guarantee and watch it go red:
+A passing test is evidence only if it can also be shown to fail. Removing the guarantee
+demonstrates that it can:
 
 1. Open `src/backend/MeetingRooms.Infrastructure/Persistence/Repositories/SlotRepository.cs`.
 2. In `TryClaimAsync`, delete the line `&& slot.BookedByUserId == null`.
 3. Run the test again. All twenty requests now receive `201`, and the test fails.
 4. Restore the line. It passes.
 
-A test that cannot be shown to fail on a real defect is ceremony, so this — not the green run —
-is what the booking phase treated as its exit criterion.
+A test that cannot be shown to fail on a real defect establishes nothing, so this demonstration —
+rather than the passing run — is what the booking phase treated as its exit criterion.
 
 The other five tests in the project pin the slot lifecycle (a closed window is refused, one still
 under way is bookable) and three things that could not be asserted until a booking could exist:
@@ -183,80 +147,78 @@ that schedule instants reach the wire as UTC with a trailing `Z`, that `isBooked
 `isBookedByMe` are correct without disclosing who booked, and that deleting a room holding a
 booking is refused with `409 RoomHasBookedSlots`.
 
-## API reference
+## Concurrency
 
-The OpenAPI document is at `/openapi/v1.json` and an interactive
-[Scalar](https://scalar.com) reference at **`/scalar/`** (a bare `/scalar` redirects
-there).
+A slot is never double-booked because **the booking is one statement** — an atomic conditional
+update, with the business condition inside the `WHERE` clause. The whole guarantee is
+`SlotRepository.TryClaimAsync`:
 
-Both are served in **every environment, including the deployed app**. That is
-deliberate: a reviewer should be able to exercise the API without cloning the
-repository. It publishes the API surface publicly, which is an accepted trade: the
-document describes endpoints rather than data, and contains no secrets.
+```csharp
+var claimed = await _dbContext.Set<Slot>()
+    .Where(slot => slot.Id == slotId
+                && slot.BookedByUserId == null
+                && slot.EndUtc > nowUtc)
+    .ExecuteUpdateAsync(
+        setters => setters
+            .SetProperty(slot => slot.BookedByUserId, userId)
+            .SetProperty(slot => slot.BookedAtUtc, nowUtc),
+        cancellationToken);
+```
 
-## Azure configuration
+`ExecuteUpdateAsync` is the one EF Core API that bypasses the change tracker: it compiles to a
+single `UPDATE … WHERE` and sends it, loading nothing. Everything else EF does is
+load-mutate-save — a read and then a write, which is the shape the assignment rules out.
 
-### Resources
+**When two requests race**, both statements arrive at the same row. One takes the row lock and
+commits. The other blocks on that lock, re-reads the committed row once it clears, fails
+`BookedByUserId IS NULL`, and updates zero rows. The check and the write are one statement, so
+no interleaving lets both see `NULL`. The winner's statement reports one row → **`201 Created`**;
+every loser's reports zero → **`409 Conflict`**, carrying `SlotAlreadyBooked`. Never a 5xx, and
+nothing silently overwritten.
 
-All in **Sweden Central**.
+**This is not "check if free, then book".** The application never decides whether the slot is
+free: by the time a row count comes back the database has already settled the race under the row
+lock, and the count *reports* which outcome occurred rather than causing it.
 
-| Resource | Name | Notes |
-|---|---|---|
-| App Service (Web App) | `meetingrooms` | Basic B1, Always On, **single instance**, WebSockets **on**, HTTPS Only **on** |
-| Azure SQL server | `sql-meetingrooms-test-task` | full name `sql-meetingrooms-test-task.database.windows.net`; *Allow Azure services* **on**; connection policy left at **Default** |
-| Azure SQL database | `MeetingRooms (sql-meetingrooms-test-task/MeetingRooms)` | provisioned tier |
-| Azure SignalR Service | `signalr-meetingrooms` | |
+Two supporting properties. It is correct under READ COMMITTED with or without RCSI — which Azure
+SQL enables by default — but *not* under SNAPSHOT, which raises update-conflict 3960 instead, so
+this path opens no transaction of its own and uses the connection's default level. And no
+client-supplied value takes part: the client posts `{ slotId }`, a server-generated surrogate
+key, so no clock skew and no `datetime2` rounding can produce two rows meaning the same slot.
 
-Single instance is load-bearing rather than incidental: it is what makes applying
-migrations at startup safe, and what makes in-process SignalR a viable fallback.
+### Three points a reviewer is likely to question
 
-**HTTPS Only is the platform setting that performs the HTTP→HTTPS redirect.** The app
-deliberately does *not* use `UseHttpsRedirection`: App Service terminates TLS at its
-front end, so the app sees plain HTTP and, without forwarded-headers configuration, the
-middleware can redirect in a loop.
+- **A repeat booking by the same user answers 201, not 409.** Reporting a loss to the caller who
+  actually holds the slot is the one incorrect response this design does not accept. Booking is
+  therefore idempotent per user, which is why the mandated test races twenty **distinct**
+  accounts rather than one caller twenty times.
+- **The unique index is not the guarantee.** `UNIQUE (RoomId, StartUtc)` prevents the slot seeder
+  from producing two rows meaning the same hour. It constrains slot *identity*, and has no part
+  in booking.
+- **The test asserts that the requests overlapped.** Twenty *serial* requests produce an identical
+  result, and the mutation probe fails identically in either case, so without that assertion a
+  passing run would establish the response codes and not the concurrency.
 
-### Application settings
+### The trade-off
 
-Names only — **no values appear in this repository**. Note that the two are configured
-in *different places* in the portal, which is the most common way to get this wrong.
+The invariant lives in one statement's `WHERE` clause rather than in a standing database
+constraint, so it binds every path through `TryClaimAsync` — which must remain the **only** write
+path to `BookedByUserId` — rather than binding the schema for all time. A separate `Bookings`
+table with `UNIQUE (SlotId)` would move it into the schema, at the cost of a 1:1 table carrying
+no state of its own. For this scope, one write path plus a test that can be *shown* to fail is
+the proportionate trade. If a booking ever gains state of its own — cancellation, rescheduling,
+or spanning several slots — it becomes an entity and this design splits into two tables. None of
+that is in scope.
 
-| Setting | Where it lives | What it is for | Since |
-|---|---|---|---|
-| `DefaultConnection` | App Service → **Connection strings**, type **SQLServer** | Azure SQL connection | phase 1 |
-| `Azure__SignalR__ConnectionString` | App Service → **Application settings** | Azure SignalR Service; when absent the app uses in-process SignalR | phase 1 |
-| `Jwt__SigningKey` | App Service → **Application settings** | signs access tokens | phase 3 |
-| `Seed__AdminEmail` | App Service → **Application settings** | seeded admin account | phase 3 |
-| `Seed__AdminPassword` | App Service → **Application settings** | seeded admin account | phase 3 |
-
-Locally these come from `dotnet user-secrets`, never from `appsettings.json`.
-
-### Diagnosing the realtime transport
-
-`POST /hubs/schedule/negotiate?negotiateVersion=1` has three outcomes, and they need
-different fixes. The placeholder page reports which one occurred.
-
-| Response | Meaning | Fix |
-|---|---|---|
-| `url` containing `.service.signalr.net` plus `accessToken` | Azure SignalR is wired | — |
-| `connectionId` and `availableTransports` | the connection string was **not read** | check the setting name, and that it is an *Application setting* rather than a *Connection string* |
-| `500` — *Azure SignalR Service is not connected yet* | it **was** read; the app has no server connection to the service **yet** | see below — transient and persistent mean different things |
-
-The second and third look similar from a browser but have nothing in common as causes.
-
-The third is also the **normal cold-start window**: on startup the SDK opens server
-connections to the service, and negotiate refuses until one is established. A request
-arriving in the first moments after a deploy or a restart therefore gets this response
-and the next one succeeds. Treat a single 500 straight after a deploy as expected; only
-a *persistent* one indicates a wrong endpoint, a wrong access key, or blocked outbound
-networking.
+The long form, including what was rejected and why, is in `docs/decisions.md` under
+*Booking and concurrency*.
 
 ## Architecture
 
-**One Azure Web App serves both halves.** The API runs from
-`src/backend/MeetingRooms.Api`; the React bundle is built by Vite into that project's
-`wwwroot` and served as static files by the same application. Same origin, so there is no CORS
-configuration and no cross-origin SignalR negotiate — two of the most common ways this
-arrangement goes wrong simply do not arise.
+**One Azure Web App serves both halves.** The React bundle is built by Vite into the API
+project's `wwwroot` and served as static files by the same application, so there is no CORS
+configuration and no cross-origin SignalR negotiate, which removes two common sources of error in
+this arrangement.
 
 The backend is four projects, each depending only inwards:
 
@@ -268,19 +230,19 @@ The backend is four projects, each depending only inwards:
 | `MeetingRooms.Api` | controllers, the SignalR hub, DI wiring, error-to-`ProblemDetails` mapping, `wwwroot` |
 
 **A booking, end to end:** `BookingsController` → `BookingService` →
-`SlotRepository.TryClaimAsync` (the one statement described under *Concurrency*) → announce.
-The announcement fires on the `Claimed` outcome **only** — never on a caller re-posting a
-booking they already hold, which succeeds but changes nothing.
+`SlotRepository.TryClaimAsync` (the one statement above) → announce. The announcement fires on
+the `Claimed` outcome **only** — never on a caller re-posting a booking they already hold, which
+succeeds but changes nothing.
 
-**Real time** is one SignalR group per room. A client calls `SubscribeToRoom` / `UnsubscribeFromRoom`
-on a single connection held for the whole session, so switching rooms swaps groups instead of
-reconnecting. The broadcast happens *after* the claim has committed, and carries
+**Real time** is one SignalR group per room. A client calls `SubscribeToRoom` /
+`UnsubscribeFromRoom` on a single connection held for the whole session, so switching rooms swaps
+groups instead of reconnecting. The broadcast happens *after* the claim has committed and carries
 `{ roomId, slotId }` and nothing else — no booker identity, consistent with what the schedule
 endpoint discloses.
 
 **Time** is stored in UTC everywhere. A schedule response names its display zone once
-(`timeZoneId`, `Europe/Kyiv`) and the client renders with `Intl`; no zone arithmetic happens in
-the browser and no zone is stored per row.
+(`timeZoneId`, `Europe/Kyiv`) and the client renders with `Intl`, so no zone arithmetic happens
+in the browser and no zone is stored per row.
 
 ## The screens
 
@@ -301,79 +263,156 @@ Admin routes are unreachable for a `User` both from the navigation and by typing
 is convenience, not the security boundary — every endpoint behind them is gated server-side
 with `[Authorize(Roles = …)]`.
 
-## Concurrency
+## API reference
 
-A slot is never double-booked because **the booking is one statement**: an atomic conditional
-update — compare-and-set, with the business condition inside the `WHERE` clause. The whole
-guarantee is `SlotRepository.TryClaimAsync`:
+The OpenAPI document is at `/openapi/v1.json`, and an interactive
+[Scalar](https://scalar.com) reference at **`/scalar/`** (a bare `/scalar` redirects there).
+Both are served in **every environment, including the deployed app** — deliberately, so a
+reviewer can exercise the API without cloning the repository. It publishes the API surface
+publicly, which is an accepted trade: the document describes endpoints rather than data, and
+contains no secrets.
 
-```csharp
-var claimed = await _dbContext.Set<Slot>()
-    .Where(slot => slot.Id == slotId
-                && slot.BookedByUserId == null
-                && slot.EndUtc > nowUtc)
-    .ExecuteUpdateAsync(
-        setters => setters
-            .SetProperty(slot => slot.BookedByUserId, userId)
-            .SetProperty(slot => slot.BookedAtUtc, nowUtc),
-        cancellationToken);
+## Azure configuration
+
+All resources are in **Sweden Central**.
+
+| Resource | Name | Notes |
+|---|---|---|
+| App Service (Web App) | `meetingrooms` | Basic B1, Always On, **single instance**, WebSockets **on**, HTTPS Only **on** |
+| Azure SQL server | `sql-meetingrooms-test-task` | `sql-meetingrooms-test-task.database.windows.net`; *Allow Azure services* **on**; connection policy left at **Default** |
+| Azure SQL database | `MeetingRooms` | provisioned tier |
+| Azure SignalR Service | `signalr-meetingrooms` | |
+
+Single instance is load-bearing rather than incidental: it is what makes applying migrations at
+startup safe, and what makes in-process SignalR a real fallback. **HTTPS Only is the platform
+setting that performs the HTTP→HTTPS redirect** — the app deliberately does *not* use
+`UseHttpsRedirection`, because App Service terminates TLS at its front end and the middleware
+can otherwise redirect in a loop.
+
+Application settings, **names only — no values appear in this repository**. The first is
+configured in a different place in the portal from the rest, which is the most common way to
+get this wrong:
+
+| Setting | Where it lives | What it is for |
+|---|---|---|
+| `DefaultConnection` | App Service → **Connection strings**, type **SQLServer** | Azure SQL |
+| `Azure__SignalR__ConnectionString` | App Service → **Application settings** | Azure SignalR; when absent the app runs SignalR in-process |
+| `Jwt__SigningKey` | App Service → **Application settings** | signs access tokens |
+| `Seed__AdminEmail`, `Seed__AdminPassword` | App Service → **Application settings** | the seeded admin account |
+
+Locally these come from `dotnet user-secrets`, never from `appsettings.json`.
+
+<details>
+<summary><b>Diagnosing the realtime transport</b> — and how Azure SignalR was verified</summary>
+
+On a single instance, **behaviour cannot tell Azure SignalR apart from the in-process
+fallback**: both deliver the same events to the same groups. So the service was not inferred
+from things working — it was verified by reading the client's socket URL, which under Azure
+SignalR is `wss://signalr-meetingrooms.service.signalr.net/client/?hub=…` rather than a path on
+the app's own origin. `/diagnostics` reports it.
+
+`POST /hubs/schedule/negotiate?negotiateVersion=1` has three outcomes, needing different fixes:
+
+| Response | Meaning | Fix |
+|---|---|---|
+| `url` containing `.service.signalr.net`, plus `accessToken` | Azure SignalR is wired | — |
+| `connectionId` and `availableTransports` | the connection string was **not read** | check the setting name, and that it is an *Application setting* rather than a *Connection string* |
+| `500` — *Azure SignalR Service is not connected yet* | it **was** read; the app has no server connection to the service yet | see below |
+
+The second and third look similar in a browser and have nothing in common as causes. The third
+is also the **normal cold-start window**: on startup the SDK opens server connections to the
+service and negotiate refuses until one is established, so a request in the first moments after
+a deploy gets it and the next one succeeds. Only a *persistent* 500 means a wrong endpoint, a
+wrong key, or blocked outbound networking.
+
+**The token reaches the hub differently on each path.** A browser cannot set an `Authorization`
+header on a WebSocket, so on the in-process path the access token arrives as an `access_token`
+query-string parameter and the JWT handler is configured to read it from there **for hub paths
+only**. Under Azure SignalR the socket terminates at the service instead, and the claims come
+from the `Authorization` header on the negotiate request — so securing the hub also makes an
+anonymous negotiate probe useless as a diagnostic.
+
+</details>
+
+## Running it locally
+
+Everything runs inside the dev container; there is no host setup. From the repository root:
+
+```bash
+cd src/frontend && npm ci --ignore-scripts && npm run build   # once, before the first run
+cd -
+dotnet run --project src/backend/MeetingRooms.Api             # serves on http://localhost:5000
 ```
 
-`ExecuteUpdateAsync` is the one EF Core API that bypasses the change tracker: it compiles to a
-single `UPDATE … WHERE` and sends it, loading nothing. Everything else EF does is
-load-mutate-save — a read followed by a write, which is the shape the assignment rules out.
+The frontend build is what puts a page in `wwwroot`; without it the API works but `/` returns
+404. The database connection string comes from the `ConnectionStrings__DefaultConnection`
+environment variable, already set in the container and pointing at the `db` service.
 
-**What happens when two requests race.** Both statements arrive at the same row. One takes the
-row lock and commits. The other blocks on that lock, re-reads the committed row once it clears,
-fails `BookedByUserId IS NULL`, and updates zero rows. The check and the write are one
-statement, so no interleaving lets both observers see `NULL`.
+The API also needs a **JWT signing key** before it will start — it is validated at startup, so a
+missing or too-short key stops the application rather than failing on the first login:
 
-- The winner's statement reports one row → **`201 Created`**.
-- Every loser's reports zero → **`409 Conflict`**, carrying the error code `SlotAlreadyBooked`.
-- Nobody receives a 5xx, and nothing is silently overwritten.
+```bash
+openssl rand -base64 32                                    # 32 bytes is the minimum accepted
+dotnet user-secrets --project src/backend/MeetingRooms.Api set 'Jwt:SigningKey' '<the value>'
+```
 
-**This is not "check if free, then book".** The application never decides whether the slot is
-free. By the time a row count comes back the race is already over — the database settled it
-under the row lock — and the count *reports* which outcome occurred rather than causing it.
+<details>
+<summary><b>Further local setup</b> — the seeded administrator, shell quoting, the macOS port clash, and the Vite dev server</summary>
 
-**Isolation level.** Correct under READ COMMITTED with or without RCSI, which Azure SQL enables
-by default. It would *not* hold under SNAPSHOT, which raises update-conflict 3960 instead, so
-this path opens no transaction of its own and uses the connection's default level.
+**A seeded administrator** is optional in Development — without it the app logs a warning and
+starts with no admin account — and required in every other environment:
 
-**No client-supplied value takes part.** The client posts `{ slotId }`, a server-generated
-surrogate key. No clock skew, no time-picker glitch and no `datetime2` rounding can produce two
-rows meaning the same slot.
+```bash
+dotnet user-secrets --project src/backend/MeetingRooms.Api set 'Seed:AdminEmail' 'admin@example.com'
+dotnet user-secrets --project src/backend/MeetingRooms.Api set 'Seed:AdminPassword' '<password>'
+```
 
-### Three things worth answering before they are asked
+The password has to satisfy ASP.NET Core Identity's default policy: at least six characters, with
+an uppercase letter, a lowercase letter, a digit and a non-alphanumeric character. **Use single
+quotes** — in bash, and in PowerShell, double quotes expand `$`, and what gets stored is then not
+what you typed. These values live in `dotnet user-secrets` locally and in App Service application
+settings in Azure; never in `appsettings.json`, and never in git.
 
-- **A repeat booking by the same user answers 201, not 409.** A caller who already holds the
-  slot is told they hold it; telling the actual winner they lost is the one misreport this
-  design refuses to make. Booking is therefore idempotent per user — which is exactly why the
-  mandated test races **twenty distinct accounts** rather than one caller twenty times.
-- **The unique index is not the guarantee.** `UNIQUE (RoomId, StartUtc)` exists so the slot
-  seeder cannot produce two rows meaning the same hour. It constrains slot *identity*, and has
-  no part in booking.
-- **The test asserts that the requests overlapped**, because twenty *serial* requests produce an
-  identical one-201-and-nineteen-409s result, and the mutation probe above reddens the same way
-  either way. Without that assertion a green run would prove the response codes and not the
-  concurrency.
+**On macOS, port 5000 belongs to AirPlay Receiver.** The container binds it correctly and `curl`
+inside the container works, but the forwarded port on the host resolves to Apple's service
+instead, so the browser shows nothing useful. Either switch AirPlay Receiver off
+(System Settings → General → AirDrop & Handoff), or remap the host side in VS Code's **Ports**
+panel → *Change Local Address Port* on 5000.
 
-### The trade-off, stated
+**For frontend work**, `npm run dev` in `src/frontend` serves on <http://localhost:5173> with hot
+reload, proxying `/api`, `/health` and `/hubs` to the API — so run both. Note the dev-server
+caveat under *Known limitations*: verify anything real-time against `:5000`.
 
-The invariant lives in one statement's `WHERE` clause rather than in a standing database
-constraint. That binds every path through `TryClaimAsync` — which must remain the **only** write
-path to `BookedByUserId` — rather than binding the schema for all time. A separate `Bookings`
-table with `UNIQUE (SlotId)` would move the invariant into the schema, at the cost of a 1:1
-table carrying no state of its own: no lifecycle, no cancellation, no attendees, no price. For
-this scope, one write path plus an automated test that can be *shown* to fail is the
-proportionate trade.
+**Two things cannot be exercised from inside the dev container**, because its outbound firewall
+allows only GitHub, npm, NuGet and Anthropic: **Azure SQL** (the local `db` container stands in)
+and **Azure SignalR** (`*.service.signalr.net`, where SignalR falls back to running in-process,
+which is correct locally).
 
-The boundary is named rather than left implicit: if a booking ever gains state of its own —
-cancellation, rescheduling, or one booking spanning several slots — it becomes an entity and
-this design splits into two tables. None of that is in scope.
+</details>
 
-The long form, including what was rejected and why, is in `docs/decisions.md` under
-*Booking and concurrency*.
+## Known limitations
+
+Each of the following is a deliberate decision rather than an oversight.
+
+- **Bookings cannot be cancelled, rescheduled or edited.** A deliberate scope choice: a booking
+  has no state of its own, which is what lets one slot be one row. `docs/requirements.md` lists
+  the full out-of-scope set.
+- **Reconnection gives up after four attempts, roughly 17 seconds.** Inside that window a
+  dropped connection recovers on its own — it re-subscribes to the current room and refetches,
+  because anything announced while it was down was never delivered. Beyond it the header reads
+  `Live updates off — reload`, which surfaces the problem to the user rather than hiding it.
+  This never affects the booking guarantee or conflict handling; only recovery from an outage.
+- **Live updates are unreliable under `npm run dev`, and correct in the production build.** The
+  likely cause is React StrictMode double-invoking the subscription effect, so a teardown from
+  the first pass resolves after the second has registered — leaving a connected socket in no
+  group. That is a hypothesis with strong circumstantial support, **not a proven root cause**;
+  it is written up in `docs/phases/phase-7-screens.md` along with the check that would confirm
+  it. Verify anything real-time against `:5000` after `npm run build`.
+- **CI does not run the concurrency test** — the GitHub runner has no SQL Server. It builds the
+  whole solution, so a compile break in that project still fails the deploy, and the test is run
+  locally and by the reviewer with the two commands above.
+- **OpenAPI and Scalar are public in every environment**, so a reviewer can exercise the API
+  without cloning. Endpoints, not data, and no secrets.
 
 ## Development process
 
