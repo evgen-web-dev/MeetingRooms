@@ -86,48 +86,102 @@ Identity, real JWT — against a **real SQL Server**, and fires twenty simultane
 `POST /api/bookings` at one slot from twenty different accounts. An in-memory or SQLite provider
 would make the guarantee untestable, since it is the database's row lock that enforces it.
 
-Two commands, from the repository root:
+### What you need
+
+Less than you would expect:
+
+- **.NET SDK 10.0.100 or later.** There is no `global.json`, so any 10.x SDK works.
+- **Docker**, running — Docker Desktop on Windows or macOS, Docker Engine on Linux.
+- **No Node, and no frontend build.** `wwwroot` is not in the repository, and the test drives
+  the API directly rather than through a browser, so it never needs one.
+- **No secrets, and no configuration of your own.**
+  `tests/MeetingRooms.ConcurrencyTests/appsettings.Tests.json` supplies the signing key, the
+  seeded administrator and a `localhost` connection-string fallback. They are fixtures for a
+  throwaway container, not credentials — the real ones live in `dotnet user-secrets` and in App
+  Service application settings.
+
+### Two commands, from the repository root
+
+The same two on every platform — the forward slashes work in PowerShell and `cmd` as well:
 
 ```bash
-docker compose up -d
+docker compose up -d --wait
 dotnet test tests/MeetingRooms.ConcurrencyTests
 ```
 
-The first starts a throwaway SQL Server on `localhost:1433`. The second creates and migrates a
-`MeetingRooms_Tests` catalog on it, registers its own users and rooms, and runs the suite.
-`docker compose down` removes it again; nothing is persisted between runs.
+The first starts a throwaway SQL Server on `localhost:1433` and, thanks to `--wait`, returns only
+once it reports healthy — so the test cannot race a database that is still booting. The second
+creates and migrates a `MeetingRooms_Tests` catalog on it, registers its own users and rooms, and
+runs the suite. A successful run ends:
+
+```text
+Passed!  - Failed:     0, Passed:     6, Skipped:     0, Total:     6
+```
+
+`docker compose down` removes the container again; nothing is persisted between runs.
 
 The tests never touch a development database — the host derives its connection string from
 whatever is configured and replaces only the catalog. That is not tidiness: bookings cannot be
 cancelled, so a run against the development database would permanently consume demo slots.
 
-> **Inside the dev container, skip the first command.** `ConnectionStrings__DefaultConnection`
-> already points at the `db` service and overrides the fallback in `appsettings.Tests.json`. The
-> container has no Docker CLI, so `docker-compose.yml` is written for a reviewer's host and has
-> been verified by inspection rather than by being run.
+<details>
+<summary><b>If something goes wrong</b> — port 1433, Apple silicon, older Compose</summary>
 
-**What the race asserts.** Exactly one request receives `201 Created`; the other nineteen receive
-`409 Conflict` carrying `SlotAlreadyBooked`; none receives a 5xx; and the database ends holding
-one booked row, whose booker is the caller who was told they won. It also asserts the requests
-genuinely overlapped — the last was issued before the first came back — because twenty *serial*
-requests produce an identical one-and-nineteen result and would otherwise pass for the wrong
-reason.
+| Symptom | Cause, and what to do |
+|---|---|
+| `Ports are not available` / `address already in use: 1433` | Something already listens there — on Windows, most often a locally installed SQL Server. Change the host side of the mapping in `docker-compose.yml` to `"14333:1433"`, then point the tests at the new port with an environment variable rather than editing the fixture (see below). |
+| The first run takes several minutes, on Apple silicon | The SQL Server image has no arm64 build, so `platform: linux/amd64` runs it under emulation. The healthcheck allows a 40-second start period for exactly this. It happens once, on the first pull and boot. |
+| `unknown flag: --wait` | Docker Compose older than v2.1.1. Run `docker compose up -d`, then wait until `docker compose ps` reports the service `healthy` before testing. |
+| A connection error on the first `dotnet test` | The container was not ready yet. Re-run it; `--wait` is what prevents this. |
+| `docker: command not found`, or a daemon error | Docker Desktop is not running. On Windows it also needs its WSL 2 backend enabled. |
 
-Twenty distinct accounts rather than one caller repeating itself, because a caller who already
-holds a slot is answered `201` by design; twenty requests from one account would report twenty
-winners and prove nothing.
+**Overriding the port or the server.** `BookingApiFactory` takes whatever connection string is
+configured and replaces only the catalog, so an environment variable is honoured and no file has
+to be edited:
 
-**The mutation probe is what makes a green run mean something.** Delete
-`&& slot.BookedByUserId == null` from `SlotRepository.TryClaimAsync` and run the suite again: all
-twenty requests receive `201` and the test fails. Restore it and it passes. A test that cannot be
-shown to fail on a real defect is ceremony, so this is the phase's actual exit criterion rather
-than the green run.
+```powershell
+$env:ConnectionStrings__DefaultConnection = "Server=localhost,14333;User Id=sa;Password=MeetingRooms_Local_1;TrustServerCertificate=True"
+```
 
-The same project also pins the slot lifecycle — a slot whose window has closed is refused, one
-still under way is bookable — and three assertions earlier phases could not reach until a booking
-could exist: that schedule instants reach the wire as UTC with a trailing `Z`, that `isBooked` and
-`isBookedByMe` are right on their true branch without disclosing who booked, and that deleting a
-room with a booked slot is refused with `409 RoomHasBookedSlots`.
+```bash
+export ConnectionStrings__DefaultConnection="Server=localhost,14333;User Id=sa;Password=MeetingRooms_Local_1;TrustServerCertificate=True"
+```
+
+**Inside this repository's dev container, skip `docker compose` entirely.**
+`ConnectionStrings__DefaultConnection` already points at the `db` service and overrides the
+fallback in `appsettings.Tests.json`. The container has no Docker CLI, which is why
+`docker-compose.yml` is written for a reviewer's host and has been verified by inspection rather
+than by being run.
+
+</details>
+
+### What the race asserts
+
+Exactly one request receives `201 Created`; the other nineteen receive `409 Conflict` carrying
+`SlotAlreadyBooked`; none receives a 5xx; and the database ends holding one booked row, whose
+booker is the caller who was told they won. It also asserts the requests genuinely **overlapped**
+— the last was issued before the first came back — because twenty *serial* requests produce an
+identical one-and-nineteen result and would otherwise pass for the wrong reason. Twenty distinct
+accounts, rather than one caller repeating itself, because a caller who already holds a slot is
+answered `201` by design.
+
+### The mutation probe — please run this one
+
+A green test proves nothing on its own. Break the guarantee and watch it go red:
+
+1. Open `src/backend/MeetingRooms.Infrastructure/Persistence/Repositories/SlotRepository.cs`.
+2. In `TryClaimAsync`, delete the line `&& slot.BookedByUserId == null`.
+3. Run the test again. All twenty requests now receive `201`, and the test fails.
+4. Restore the line. It passes.
+
+A test that cannot be shown to fail on a real defect is ceremony, so this — not the green run —
+is what the booking phase treated as its exit criterion.
+
+The other five tests in the project pin the slot lifecycle (a closed window is refused, one still
+under way is bookable) and three things that could not be asserted until a booking could exist:
+that schedule instants reach the wire as UTC with a trailing `Z`, that `isBooked` and
+`isBookedByMe` are correct without disclosing who booked, and that deleting a room holding a
+booking is refused with `409 RoomHasBookedSlots`.
 
 ## API reference
 
