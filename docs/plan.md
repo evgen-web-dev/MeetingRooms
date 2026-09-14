@@ -195,6 +195,19 @@ Between phases 3 and 4 sits the migration flip described in `docs/decisions.md`.
    query-string parameter rather than a header, and `negotiate` failures presenting
    as generic connection errors. *Mitigated by:* the empty-hub negotiate smoke test in
    phase 1. *Fallback:* in-process SignalR on the single instance, a config-only change.
+
+   *Amended during phase 6, after doing it.* The heading conflates two things. The **logic** —
+   per-room groups, the notify rule, re-subscription after a reconnect — is fully exercisable in
+   this container against in-process SignalR, and was: by unit tests, by a Node SignalR client
+   against the running application, and through the Vite proxy with the transport forced to
+   WebSockets. Only the **transport** needed the deploy. That part was real: behaviour cannot
+   distinguish Azure SignalR from the in-process fallback on a single instance, so the proof is the
+   client's socket URL — `wss://signalr-meetingrooms.service.signalr.net/client/?hub=…` — and
+   nothing short of reading it would have settled the question. Two of the three sharp edges landed
+   differently than predicted: the query-string token is the *in-process* path, since under Azure
+   SignalR the socket terminates at the service and claims arrive from negotiate's `Authorization`
+   header; and the unanticipated one was that securing the hub makes an **anonymous negotiate probe
+   useless**, which silently retired the diagnostic phases 1 and 2 relied on.
 4. **Migrations reaching Azure SQL.** No outbound route from here and no Azure CLI.
    *Mitigated by:* `Database.Migrate()` at startup, safe because the plan is single
    instance; the flip to manual migration after phase 3.
@@ -215,5 +228,8 @@ Between phases 3 and 4 sits the migration flip described in `docs/decisions.md`.
   the expired-slot test must go red. Stagger the racing requests; the overlap assertion must go
   red. Those checks, not passing tests on their own, are the phase's exit criterion.
 - **Phase 6:** two browsers on the same room; booking in one updates the other with
-  no refresh, on the deployed app — Azure SignalR cannot be exercised from this
-  container.
+  no refresh, on the deployed app. *Done, and more than this:* the same check ran locally
+  against in-process SignalR, alongside a Node SignalR client covering room scoping, silence
+  on a replayed booking, and recovery after a reconnect. What the deploy alone established is
+  that **Azure SignalR** is the transport, read from the client's socket URL — behaviour proves
+  nothing there, since the fallback looks identical on a single instance.
