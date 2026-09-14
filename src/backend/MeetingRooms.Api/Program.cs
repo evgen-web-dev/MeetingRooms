@@ -101,3 +101,10 @@ app.Map("/api/{**slug}", () => Results.Problem(statusCode: StatusCodes.Status404
 app.MapFallbackToFile("index.html");
 
 app.Run();
+
+// Reachable from a test host. Top-level statements compile into a class named Program with
+// *internal* accessibility, so WebApplicationFactory<Program> in the test assembly cannot name
+// it - a .NET-specific wrinkle with no PHP analogue. This merges a public declaration into the
+// generated one. The alternative, InternalsVisibleTo in the .csproj, hides the dependency from
+// the file it actually applies to.
+public partial class Program { }
