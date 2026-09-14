@@ -194,7 +194,7 @@ Between phases 3 and 4 sits the migration flip described in `docs/decisions.md`.
 6. **Frontend build into `wwwroot` through CI.** Vite base path, Tailwind config,
    `npm ci && npm run build` ordering ahead of `dotnet publish`.
    *Mitigated by:* doing it in phase 2 while it is still one page.
-7. **Time semantics.** UTC stored, Europe/Stockholm displayed, DST boundaries. Low
+7. **Time semantics.** UTC stored, Europe/Kyiv displayed, DST boundaries. Low
    probability, high embarrassment.
 
 ## Verification

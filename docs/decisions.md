@@ -121,8 +121,15 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   user-initiated transactions.
 - **`IEntityTypeConfiguration<T>` + `modelBuilder.ApplyConfigurationsFromAssembly`**,
   with zero data annotations on entities.
-- **Times are stored UTC as `datetime2(0)`** and displayed in Europe/Stockholm.
+- **Times are stored UTC as `datetime2(0)`** and displayed in Europe/Kyiv.
   Note: SQL Server's `timestamp` is a synonym for `rowversion`, not a date/time type.
+
+  > *Amended during phase 4 planning.* The display zone was Europe/Stockholm, chosen
+  > alongside the Azure region. The region is where the bytes run and says nothing about
+  > what the numbers mean; the rooms are fictional, so the zone's only job is to be
+  > legible to whoever opens the deployed application. `assignment.md` is silent on time
+  > zones, so this amends `docs/requirements.md` §3 and §7 without touching anything
+  > authoritative.
 
 ## Booking and concurrency
 
