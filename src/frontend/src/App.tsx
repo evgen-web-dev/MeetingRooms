@@ -36,54 +36,86 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 async function checkHealth(): Promise<CheckResult> {
   try {
     const response = await fetch('/health')
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    return { status: 'ok', text: JSON.stringify(await response.json(), null, 2) }
+    const body = await response.text()
+
+    // Body first, then status - the lesson phase 1 learned on negotiate, applied here after a
+    // deployed 500 could not be diagnosed after the fact. A failing /health is exactly when its
+    // body matters, and the body says which failure it was: the application's own handler answers
+    // ProblemDetails JSON carrying errorDetails, while the platform answering for an app that has
+    // not finished starting (ASP.NET Core Module 500.3x, during the migrate-and-seed block that
+    // runs before app.Run()) returns an HTML page. Discarding it loses the distinction.
+    if (!response.ok) throw new Error(`HTTP ${response.status} — ${body.slice(0, 300)}`)
+
+    return { status: 'ok', text: JSON.stringify(JSON.parse(body), null, 2) }
   } catch (e) {
     return { status: 'error', text: `Health check failed: ${message(e)}` }
   }
 }
 
-/** Negotiate is the cheapest proof that SignalR is wired, and the only one available
- *  before a real client connects. It never opens a connection. */
-async function checkRealtime(): Promise<CheckResult> {
+/** Reads the transport out of a negotiate payload: Azure SignalR answers with `url` plus
+ *  `accessToken`, in-process SignalR with `connectionId`. */
+function describeTransport(negotiate: NegotiateResponse): CheckResult {
+  if (negotiate.url) {
+    // The access token is deliberately not rendered - only whether one came back.
+    return {
+      status: negotiate.accessToken ? 'ok' : 'error',
+      text: [
+        'Azure SignalR',
+        `endpoint: ${new URL(negotiate.url).host}`,
+        `accessToken: ${negotiate.accessToken ? 'present' : 'MISSING'}`,
+      ].join('\n'),
+    }
+  }
+
+  if (negotiate.connectionId) {
+    const transports = (negotiate.availableTransports ?? []).map((t) => t.transport).join(', ')
+    return {
+      status: 'warn',
+      text: [
+        'In-process SignalR — no Azure connection string was read',
+        `transports: ${transports}`,
+      ].join('\n'),
+    }
+  }
+
+  return {
+    status: 'error',
+    text: `Unrecognised negotiate response:\n${JSON.stringify(negotiate, null, 2)}`,
+  }
+}
+
+/** Negotiate is the cheapest proof that SignalR is wired, and the only one available before a
+ *  real client connects. It never opens a connection.
+ *
+ *  Called twice on this page, for two different questions. Without a token it asks whether the
+ *  hub is *secured*: since phase 6 the hub carries [Authorize], so 401 is the correct answer and
+ *  anything else is the finding. With a token it asks which *transport* is carrying the hub -
+ *  the Azure-versus-in-process diagnosis phases 1 and 2 relied on, which an anonymous negotiate
+ *  can no longer see, because a refusal has no payload to read it from. */
+async function checkRealtime(token?: string): Promise<CheckResult> {
   try {
-    const response = await fetch('/hubs/schedule/negotiate?negotiateVersion=1', { method: 'POST' })
+    const response = await fetch('/hubs/schedule/negotiate?negotiateVersion=1', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
     const body = await response.text()
+
+    if (response.status === 401 && token === undefined) {
+      return {
+        status: 'ok',
+        text: [
+          'Hub is secured — an unauthenticated negotiate is refused (401).',
+          'Which transport is carrying it is identified after logging in below.',
+        ].join('\n'),
+      }
+    }
 
     // A failed negotiate answers in plain text, not JSON, so read the body as text first
     // and surface it: "Azure SignalR Service is not connected yet" is a 500 that means
     // something quite specific, and parsing it as JSON would lose it.
     if (!response.ok) throw new Error(`HTTP ${response.status} — ${body.slice(0, 200)}`)
 
-    const negotiate = JSON.parse(body) as NegotiateResponse
-
-    if (negotiate.url) {
-      // The access token is deliberately not rendered - only whether one came back.
-      return {
-        status: negotiate.accessToken ? 'ok' : 'error',
-        text: [
-          'Azure SignalR',
-          `endpoint: ${new URL(negotiate.url).host}`,
-          `accessToken: ${negotiate.accessToken ? 'present' : 'MISSING'}`,
-        ].join('\n'),
-      }
-    }
-
-    if (negotiate.connectionId) {
-      const transports = (negotiate.availableTransports ?? []).map((t) => t.transport).join(', ')
-      return {
-        status: 'warn',
-        text: [
-          'In-process SignalR — no Azure connection string was read',
-          `transports: ${transports}`,
-        ].join('\n'),
-      }
-    }
-
-    return {
-      status: 'error',
-      text: `Unrecognised negotiate response:\n${JSON.stringify(negotiate, null, 2)}`,
-    }
+    return describeTransport(JSON.parse(body) as NegotiateResponse)
   } catch (e) {
     return { status: 'error', text: `Negotiate failed: ${message(e)}` }
   }
@@ -127,13 +159,15 @@ export default function App() {
 
       <Panel title="Realtime transport" result={realtime}>
         <p className="mt-2 text-sm text-zinc-500">
-          Negotiate has three outcomes, and they need different fixes:{' '}
+          Anonymous, this asks one question: is the hub secured? Since the hub carries{' '}
+          <code>[Authorize]</code>, <strong className="font-medium text-zinc-700">401</strong> is
+          the correct answer. The transport diagnosis moved below, where there is a token:{' '}
           <strong className="font-medium text-zinc-700">Azure SignalR</strong> is the deployed
           target; <strong className="font-medium text-zinc-700">in-process</strong> means the
           connection string was not read at all;{' '}
           <strong className="font-medium text-zinc-700">not connected</strong> means it was read
-          but the service is unreachable — which is also the normal cold-start window for the
-          first request after a deploy.
+          but the service is unreachable — the normal cold-start window for the first request
+          after a deploy.
         </p>
       </Panel>
 
@@ -223,6 +257,7 @@ function LivePanel() {
   const [roomId, setRoomId] = useState<number | null>(null)
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [status, setStatus] = useState<ConnectionStatus | 'offline'>('offline')
+  const [transport, setTransport] = useState<CheckResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const logIn = async (event: FormEvent) => {
@@ -248,6 +283,12 @@ function LivePanel() {
     if (!token) return
 
     let cancelled = false
+
+    // The authenticated half of the negotiate check - the only way left to tell Azure SignalR
+    // from the in-process fallback, since both behave identically on a single instance.
+    void checkRealtime(token).then((result) => {
+      if (!cancelled) setTransport(result)
+    })
 
     void api<Room[]>('/api/rooms', token)
       .then((loaded) => {
@@ -424,6 +465,14 @@ function LivePanel() {
         <span className={`text-sm ${connectionStyles[status]}`}>hub: {status}</span>
         <span className="text-sm text-zinc-500">{schedule?.timeZoneId}</span>
       </div>
+
+      {transport && (
+        <pre
+          className={`mt-2 overflow-x-auto rounded-md bg-zinc-100 p-3 text-xs whitespace-pre-wrap ${statusStyles[transport.status]}`}
+        >
+          {transport.text}
+        </pre>
+      )}
 
       {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
 
