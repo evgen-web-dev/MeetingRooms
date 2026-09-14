@@ -1,0 +1,38 @@
+# SQL Server for the automated concurrency test (assignment #6), so a reviewer can run it with
+# two commands and no other setup:
+#
+#   docker compose up -d
+#   dotnet test tests/MeetingRooms.ConcurrencyTests
+#
+# This is not the development database. Inside the dev container that is a separate SQL Server on
+# the internal `db` host, and ConnectionStrings__DefaultConnection points at it - which overrides
+# the fallback in tests/MeetingRooms.ConcurrencyTests/appsettings.Tests.json, so the tests run
+# there without this file at all.
+#
+# The password is a local throwaway matching appsettings.Tests.json. It guards a container that
+# lives for the length of a test run and holds nothing but generated rooms and slots. The real
+# credentials are in dotnet user-secrets locally and App Service application settings in Azure.
+#
+# No volume on purpose: every `docker compose down` leaves a reviewer a clean database, and the
+# test host creates and migrates the MeetingRooms_Tests catalog itself on first use.
+
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    # Required under Apple silicon - the image has no arm64 build - and harmless on an amd64
+    # host, which ignores it. Emulation is why the healthcheck below allows a long start period.
+    platform: linux/amd64
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "MeetingRooms_Local_1"
+      MSSQL_PID: "Developer"
+    healthcheck:
+      # $$ escapes the $ so Compose passes it through; the container's own shell expands it.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # Emulated amd64 boots slowly under Apple silicon - give it room.
+      start_period: 40s

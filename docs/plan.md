@@ -181,6 +181,15 @@ Between phases 3 and 4 sits the migration flip described in `docs/decisions.md`.
    if the requests do not overlap, or if a single `HttpClient` serialises them.
    *Mitigated by:* real SQL Server via a root `docker-compose.yml`, requests released
    off one `TaskCompletionSource`, and the mutation probe.
+
+   *Amended during phase 5, after probing rather than reasoning.* That mitigation does **not**
+   establish overlap. Twenty serial requests produce exactly the same one-201-and-nineteen-409s as
+   a real race, and the mutation probe reddens identically either way, because with the free-slot
+   predicate removed every `UPDATE` matches whatever the ordering. Removing
+   `RunContinuationsAsynchronously` turned out not to serialise the waiters either. The test now
+   *measures* overlap — the last request was issued before the first came back — and that
+   assertion is what retires this risk. See `docs/decisions.md` under *Testing*.
+
 3. **Azure SignalR cannot be tested from this container.** First real proof is
    post-deploy. Sharp edges: WebSockets on the Web App, the hub's JWT arriving as a
    query-string parameter rather than a header, and `negotiate` failures presenting
@@ -201,9 +210,10 @@ Between phases 3 and 4 sits the migration flip described in `docs/decisions.md`.
 
 - **Every phase:** `dotnet build`, `dotnet test`, run locally against the `db`
   container, then redeploy and exercise `/health` plus whatever the phase touched.
-- **Phase 5 specifically — the mutation probe.** Delete `&& s.BookedByUserId == null`
-  from the `Where` clause; the concurrency test must go red. Restore it; green. That
-  check, not a passing test on its own, is the phase's exit criterion.
+- **Phase 5 specifically — three probes, not one.** Delete `&& s.BookedByUserId == null` from the
+  `Where` clause; the concurrency test must go red with twenty 201s. Delete `&& s.EndUtc > nowUtc`;
+  the expired-slot test must go red. Stagger the racing requests; the overlap assertion must go
+  red. Those checks, not passing tests on their own, are the phase's exit criterion.
 - **Phase 6:** two browsers on the same room; booking in one updates the other with
   no refresh, on the deployed app — Azure SignalR cannot be exercised from this
   container.

@@ -11,6 +11,7 @@ public static class DependencyInjectionExtensions
     {
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IRoomService, RoomService>();
+        services.AddScoped<IBookingService, BookingService>();
 
         return services;
     }

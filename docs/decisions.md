@@ -46,6 +46,14 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   > by nothing. **Revisit if a later phase's DTOs reach eight to ten fields across several
   > types**, which is where a configured mapper starts paying rent.
 
+  > *Revisited in phase 5, because that phase crossed the threshold above: six new types, seven
+  > fields on the widest.* Still hand-written, but on a different argument than the line-count one.
+  > These are **flattening projections** — `slot.Room.Name` becomes `RoomName`,
+  > `slot.BookedByUser.Email` becomes `BookedByEmail` — and convention-based mapping does not reach
+  > across a navigation property, so every one of them would be a configured line anyway. The
+  > trigger has now fired once and been answered; treat a third occasion as a real signal rather
+  > than re-running this argument.
+
 ## API surface and errors
 
 - **Result pattern** for expected failures — returned, not thrown. A 500 means
@@ -146,6 +154,27 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   > `PagedResult`, `PaginatedResponse` — is worth borrowing there, along with its two
   > cautions: count on the unpaged query first, and `OrderBy` before `Skip`/`Take` or the
   > page is non-deterministic.
+
+- **The bookings lists are not paginated**, which retires the expectation recorded just above.
+
+  > *Settled in phase 5, when those lists were built.* The prediction was sound in principle — they
+  > are the one genuinely unbounded read in the application — but the horizon is fourteen days and
+  > the deployed application is a demo, so the admin list is tens of rows. Four new types plus
+  > count-before-paging on the phase that carries the graded core is machinery competing with the
+  > thing being graded. Recorded as a decision rather than an omission: the endpoint to page first
+  > is `GET /api/bookings`, and the reference project's four-type pattern is what to borrow.
+
+- **A booking answers 201 with no `Location` header**, for the reason registration already does: a
+  booking is not an addressable resource here — it has no identity of its own — so the only thing
+  to point at would be the slot, which is not what was created.
+- **A caller who already holds the slot gets 201 as well, not 200.** Either way they hold it, and a
+  separate status would make every client branch on a distinction that means nothing to them.
+- **`timeZoneId` is named once per bookings-list response too**, not only on a schedule. A "my
+  bookings" screen may never call the schedule endpoint, and a client holding its own copy of
+  `Europe/Kyiv` is how a generator and a formatter drift apart.
+- **No server-computed "bookable" flag on a schedule slot.** A slot whose window has closed is
+  `isBooked: false` and yet unbookable; the client has `endUtc` and its own clock, and a
+  server-computed flag would be stale the moment it is serialised. Phase 7 greys them out.
 
 ## Validation
 
@@ -314,6 +343,46 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
   `ExecuteDelete` never runs an EF-side cascade, so a `ClientCascade` relationship would
   fail here on a foreign-key violation instead.
 
+- **A caller who already holds the slot is told 201, not 409.** The failure path re-reads the row
+  — it has to anyway, to tell 404 from 409 — and reports success when `BookedByUserId` is the
+  caller's own.
+
+  > *Settled while planning phase 5, closing the entry this file previously carried under* Still
+  > open. `EnableRetryOnFailure` replays an operation when a transient fault lands after the commit
+  > but before the acknowledgement. The replayed conditional `UPDATE` then finds the slot booked by
+  > its own winning write, matches zero rows, and would tell the caller who actually won that they
+  > lost. The invariant holds either way; the response would lie, to the one caller entitled to a
+  > truthful yes.
+  >
+  > **The accepted consequence is that booking is idempotent per user.** A deliberate second
+  > request from the same account also succeeds, because nothing distinguishes it from a replay
+  > without an idempotency key — machinery this scope does not justify. A false 409 to the winner
+  > is the worse lie.
+  >
+  > **The consequence for the mandated test, which is easy to miss:** N requests from *one* account
+  > would each find their own id on the row and report N winners. The concurrency test therefore
+  > uses N **distinct** users.
+
+- **The 201 carries the booking time from the row, not from the request that asked.** A replay
+  reports the same instant either way; a deliberate second request hours later would otherwise
+  claim the booking happened just now. No screen consumes the field — it is the visible proof that
+  asking twice did not rebook anything.
+- **A slot stops being bookable when it *ends*, not when it starts.** The predicate is
+  `slot.EndUtc > nowUtc`, in the same `WHERE` clause: a slot with half an hour left is still half
+  an hour of a meeting room. `SlotHasEnded` → 409.
+- **Zero rows affected has four explanations, resolved in a stated order:** the caller's own
+  booking → 201; booked by anyone else → 409 `SlotAlreadyBooked`; free but expired → 409
+  `SlotHasEnded`; no row → 404 `SlotNotFound`. A fifth state — free, unexpired, yet unmatched — is
+  unreachable and **throws** rather than returning the least-wrong answer: a booking is never
+  removed, `EndUtc` is never updated, and `nowUtc` is fixed for the call, so such a row would have
+  been claimed by the `UPDATE`.
+- **`nowUtc` is read once from `TimeProvider` and truncated to whole seconds** before it is passed
+  down. Once, so the predicate that refuses a claim and the timestamp that records one are the same
+  instant. Truncated, because `datetime2(0)` **rounds**: the parameter inherits the column's type,
+  so an untruncated value would judge a slot ended up to half a second early and store something
+  the response then misreports. There is no BCL truncation helper; the ticks arithmetic is the
+  idiom.
+
 ## Authentication and identity
 
 - **ASP.NET Core Identity** for users and roles.
@@ -440,6 +509,39 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
 - **The mutation probe is the real exit criterion** for the booking phase: remove
   `&& s.BookedByUserId == null`, watch the test go red, restore it.
 
+- **A green concurrency test does not establish that the requests overlapped, and neither does the
+  mutation probe.** Twenty *serial* requests produce exactly the same one-201-and-nineteen-409s as
+  a real race, and with the free-slot predicate removed every `UPDATE` matches whatever the
+  ordering — so the probe reddens identically either way. The test therefore **measures** overlap:
+  the last request was issued before the first came back, so all twenty were in flight at one
+  instant. This is `docs/plan.md` risk 2, and that assertion is the only thing that retires it.
+
+  > *Found in phase 5 by probing rather than reasoning.* Removing
+  > `TaskCreationOptions.RunContinuationsAsynchronously` was expected to serialise the waiters and
+  > did not — each continuation runs inline only until its HTTP call suspends, after which the
+  > releasing thread moves on. A comment claiming otherwise was corrected rather than left
+  > standing. Staggering the requests 50 ms apart is what reddens the overlap assertion.
+
+- **The integration tests run against their own catalog, derived rather than written down.**
+  `SqlConnectionStringBuilder` takes whatever connection string is configured and replaces only
+  `InitialCatalog`. No credential enters the repository, the same code works in the dev container
+  and on a reviewer's machine, and the development database cannot be reached by accident —
+  which matters because bookings cannot be cancelled, so a run against it would permanently
+  consume demo slots.
+- **`appsettings.Tests.json` holds fixtures, not secrets.** A signing key and a seeded
+  administrator used only by the test host against a local test database, plus a localhost
+  connection-string fallback matching the root `docker-compose.yml`. The real values stay in
+  `dotnet user-secrets` and App Service application settings.
+- **Window-dependent tests insert the slot they need through `AppDbContext`**, rather than skipping
+  when the generated grid happens to contain no expired slot. Deterministic at any hour, with no
+  substituted clock. Writing a *free slot* row is not a booking — the standing rule is only that
+  nothing but `TryClaimAsync` writes `BookedByUserId`.
+- **CI runs the unit project only.** `.github/workflows/deploy.yml` still builds the whole solution,
+  so a compile break anywhere fails there; but the concurrency project needs a real SQL Server the
+  runner does not have. Assignment #6 asks for a test in the repository that the reviewer can run,
+  which it is, with two documented commands. A database container and a timing-sensitive test on
+  the *deploy* path would buy a green tick at the cost of a deploy a slow container can block.
+
 ## Deployment and operations
 
 - **Azure baseline:** App Service Basic B1, Always On, single instance, WebSockets
@@ -549,14 +651,12 @@ Previously open, now closed:
 - Frontend routing structure and screen breakdown — deliberately deferred to phase 7.
 - The exact `dotnet ef database update` invocation for the post-phase-3 migration
   flip; a ten-minute detail, not a design decision.
-- **Phase 5 must decide the retry-after-commit case.** `EnableRetryOnFailure` replays an
-  operation when a transient fault lands after the commit but before the acknowledgement.
-  For the booking claim that does not break the invariant — nothing double-books — but it
-  misreports: the replayed conditional `UPDATE` finds the slot already booked by its own
-  winning write, matches zero rows, and the caller who actually won is told 409. Re-reading
-  the row and checking whether `BookedByUserId` is the caller's own before concluding
-  conflict is the obvious answer; it needs deciding deliberately rather than being
-  discovered during verification.
 
 *Closed by phase 4:* room fields beyond name and capacity — there are none, and the name is
 not unique (see *Persistence*).
+
+*Closed by phase 5:* the retry-after-commit case. A caller who already holds the slot is answered
+201 rather than 409, which makes booking idempotent per user — see *Booking and concurrency* for
+the reasoning and for what it forces on the mandated test. Also closed: whether the bookings lists
+are paginated (they are not — see *API surface and errors*) and how CI relates to a test that needs
+a real SQL Server (it does not run it — see *Testing*).
