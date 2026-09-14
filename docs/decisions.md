@@ -102,11 +102,24 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   `DateTimeOffset?`. Absent bounds mean the whole current window, resolved server-side, so
   a client never computes where a local day begins in UTC.
 
-  > *Settled during phase 4.* `DateTimeOffset` rather than `DateTime` because MVC binds a
-  > query-string `DateTime` with `DateTimeStyles.RoundtripKind`: a trailing `Z` arrives as
-  > `Kind.Utc`, an explicit offset as `Kind.Local`, a bare date as `Unspecified` — three
-  > kinds to normalise, and a silent, hours-wrong bug if one is missed. Verified end to end
-  > that both `...Z` and `...+03:00` forms bind to the same window.
+  > *Settled during phase 4, and measured rather than assumed.* MVC parses a query-string
+  > `DateTime` in an `AdjustToUniversal` style: a trailing `Z` **and** an explicit offset
+  > both arrive as `Kind.Utc` (the offset already applied), while a value with neither
+  > arrives as `Unspecified` and is taken at face value. `DateTimeOffset` binds all three
+  > unambiguously and `.UtcDateTime` needs no normalising.
+  >
+  > **The trap that survives either choice:** a value sent with *no* offset is interpreted
+  > in the **server's** local zone. That is `Europe/Kyiv` in the dev container — the `TZ`
+  > variable is inherited from the host through `.devcontainer/docker-compose.yml` — and
+  > UTC on App Service, so `?fromUtc=2026-09-15` means two different instants in the two
+  > environments. Not worth engineering around: once bound, "the caller sent +03:00" and
+  > "the caller sent nothing and the server assumed +03:00" are indistinguishable, so no
+  > validator can catch it. Clients send ISO strings with `Z` — which is what
+  > `Date.prototype.toISOString` produces — and the parameters are optional anyway.
+  >
+  > Nothing else in the application reads server-local time: `TimeProvider.GetUtcNow()`
+  > plus explicit zone conversion is the rule everywhere, which is precisely why this is
+  > the only place the discrepancy can surface.
 
 - **The display zone is named once per schedule response** as `timeZoneId`, and never
   stored per row. Nothing creates a slot from a browser, so there is no per-slot zone to

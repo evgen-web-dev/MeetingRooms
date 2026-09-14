@@ -22,12 +22,17 @@ public sealed record UpdateRoomRequest(string Name, int Capacity);
 /// Exclusive upper bound. Absent means the end of the horizon.
 /// </param>
 /// <remarks>
-/// <see cref="DateTimeOffset"/> rather than <see cref="DateTime"/>, because MVC binds a
-/// query-string <c>DateTime</c> with <c>DateTimeStyles.RoundtripKind</c>: a trailing <c>Z</c>
-/// arrives as <c>Kind.Utc</c>, an explicit offset as <c>Kind.Local</c>, and a bare date as
-/// <c>Unspecified</c> - three kinds the service would have to normalise, silently and wrongly if
-/// it missed one. <see cref="DateTimeOffset"/> carries the offset, and <c>.UtcDateTime</c> is
-/// unambiguous.
+/// <see cref="DateTimeOffset"/> rather than <see cref="DateTime"/>. MVC parses a query-string
+/// <c>DateTime</c> in an <c>AdjustToUniversal</c> style: a trailing <c>Z</c> and an explicit
+/// offset both arrive as <c>Kind.Utc</c>, while a value carrying neither arrives as
+/// <c>Unspecified</c> and is taken at face value - so the service would have to normalise two
+/// kinds, silently and wrongly if it missed one. <see cref="DateTimeOffset"/> binds all three
+/// forms unambiguously and <c>.UtcDateTime</c> needs no normalising.
+/// <para>
+/// One trap survives either choice: a value sent with no offset at all is interpreted in the
+/// <em>server's</em> local zone, which is not the same in the dev container as on App Service.
+/// See <c>docs/decisions.md</c>; clients send <c>Z</c>.
+/// </para>
 /// </remarks>
 public sealed record ScheduleRangeRequest(DateTimeOffset? FromUtc, DateTimeOffset? ToUtc);
 
