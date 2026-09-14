@@ -198,12 +198,128 @@ networking.
 
 ## Architecture
 
-> **TODO (phase 8).**
+**One Azure Web App serves both halves.** The API runs from
+`src/backend/MeetingRooms.Api`; the React bundle is built by Vite into that project's
+`wwwroot` and served as static files by the same application. Same origin, so there is no CORS
+configuration and no cross-origin SignalR negotiate — two of the most common ways this
+arrangement goes wrong simply do not arise.
+
+The backend is four projects, each depending only inwards:
+
+| Project | Owns |
+|---|---|
+| `MeetingRooms.Domain` | `Room`, `Slot`, `AppUser`, the slot-grid generator, role constants. No dependencies |
+| `MeetingRooms.Application` | ports (`ISlotRepository`, `IScheduleNotifier`, …), services, `OperationResult`, error codes, DTOs |
+| `MeetingRooms.Infrastructure` | `AppDbContext`, EF configurations, repositories, Identity, migrations, seeders |
+| `MeetingRooms.Api` | controllers, the SignalR hub, DI wiring, error-to-`ProblemDetails` mapping, `wwwroot` |
+
+**A booking, end to end:** `BookingsController` → `BookingService` →
+`SlotRepository.TryClaimAsync` (the one statement described under *Concurrency*) → announce.
+The announcement fires on the `Claimed` outcome **only** — never on a caller re-posting a
+booking they already hold, which succeeds but changes nothing.
+
+**Real time** is one SignalR group per room. A client calls `SubscribeToRoom` / `UnsubscribeFromRoom`
+on a single connection held for the whole session, so switching rooms swaps groups instead of
+reconnecting. The broadcast happens *after* the claim has committed, and carries
+`{ roomId, slotId }` and nothing else — no booker identity, consistent with what the schedule
+endpoint discloses.
+
+**Time** is stored in UTC everywhere. A schedule response names its display zone once
+(`timeZoneId`, `Europe/Kyiv`) and the client renders with `Intl`; no zone arithmetic happens in
+the browser and no zone is stored per row.
+
+## The screens
+
+Real URLs, not view state: the API serves `index.html` for unmatched routes, so a deep link to
+a room survives a hard refresh.
+
+| Route | What it is | Needs |
+|---|---|---|
+| `/login`, `/register` | email and password; registering grants the `User` role and logs straight in | — |
+| `/rooms` | every room; for an admin, inline create, edit and delete | `User` |
+| `/rooms/:roomId` | the day schedule, `◀ Tue 15 Sep ▶` across a 14-day horizon. Book a free slot; other viewers of that room see it immediately | `User` |
+| `/bookings` | your own bookings | `User` |
+| `/admin/bookings` | every user's bookings, with the booker's email — the one read in this API that discloses one user's identity to another | `Admin` |
+| `/diagnostics` | database health, and which transport SignalR is actually using | `User` |
+| `/scalar/` | the interactive API reference | — |
+
+Admin routes are unreachable for a `User` both from the navigation and by typing the URL. That
+is convenience, not the security boundary — every endpoint behind them is gated server-side
+with `[Authorize(Roles = …)]`.
 
 ## Concurrency
 
-> **TODO (phase 8).** How a slot is never double-booked, what happens when two requests
-> race, and the trade-off accepted.
+A slot is never double-booked because **the booking is one statement**: an atomic conditional
+update — compare-and-set, with the business condition inside the `WHERE` clause. The whole
+guarantee is `SlotRepository.TryClaimAsync`:
+
+```csharp
+var claimed = await _dbContext.Set<Slot>()
+    .Where(slot => slot.Id == slotId
+                && slot.BookedByUserId == null
+                && slot.EndUtc > nowUtc)
+    .ExecuteUpdateAsync(
+        setters => setters
+            .SetProperty(slot => slot.BookedByUserId, userId)
+            .SetProperty(slot => slot.BookedAtUtc, nowUtc),
+        cancellationToken);
+```
+
+`ExecuteUpdateAsync` is the one EF Core API that bypasses the change tracker: it compiles to a
+single `UPDATE … WHERE` and sends it, loading nothing. Everything else EF does is
+load-mutate-save — a read followed by a write, which is the shape the assignment rules out.
+
+**What happens when two requests race.** Both statements arrive at the same row. One takes the
+row lock and commits. The other blocks on that lock, re-reads the committed row once it clears,
+fails `BookedByUserId IS NULL`, and updates zero rows. The check and the write are one
+statement, so no interleaving lets both observers see `NULL`.
+
+- The winner's statement reports one row → **`201 Created`**.
+- Every loser's reports zero → **`409 Conflict`**, carrying the error code `SlotAlreadyBooked`.
+- Nobody receives a 5xx, and nothing is silently overwritten.
+
+**This is not "check if free, then book".** The application never decides whether the slot is
+free. By the time a row count comes back the race is already over — the database settled it
+under the row lock — and the count *reports* which outcome occurred rather than causing it.
+
+**Isolation level.** Correct under READ COMMITTED with or without RCSI, which Azure SQL enables
+by default. It would *not* hold under SNAPSHOT, which raises update-conflict 3960 instead, so
+this path opens no transaction of its own and uses the connection's default level.
+
+**No client-supplied value takes part.** The client posts `{ slotId }`, a server-generated
+surrogate key. No clock skew, no time-picker glitch and no `datetime2` rounding can produce two
+rows meaning the same slot.
+
+### Three things worth answering before they are asked
+
+- **A repeat booking by the same user answers 201, not 409.** A caller who already holds the
+  slot is told they hold it; telling the actual winner they lost is the one misreport this
+  design refuses to make. Booking is therefore idempotent per user — which is exactly why the
+  mandated test races **twenty distinct accounts** rather than one caller twenty times.
+- **The unique index is not the guarantee.** `UNIQUE (RoomId, StartUtc)` exists so the slot
+  seeder cannot produce two rows meaning the same hour. It constrains slot *identity*, and has
+  no part in booking.
+- **The test asserts that the requests overlapped**, because twenty *serial* requests produce an
+  identical one-201-and-nineteen-409s result, and the mutation probe above reddens the same way
+  either way. Without that assertion a green run would prove the response codes and not the
+  concurrency.
+
+### The trade-off, stated
+
+The invariant lives in one statement's `WHERE` clause rather than in a standing database
+constraint. That binds every path through `TryClaimAsync` — which must remain the **only** write
+path to `BookedByUserId` — rather than binding the schema for all time. A separate `Bookings`
+table with `UNIQUE (SlotId)` would move the invariant into the schema, at the cost of a 1:1
+table carrying no state of its own: no lifecycle, no cancellation, no attendees, no price. For
+this scope, one write path plus an automated test that can be *shown* to fail is the
+proportionate trade.
+
+The boundary is named rather than left implicit: if a booking ever gains state of its own —
+cancellation, rescheduling, or one booking spanning several slots — it becomes an entity and
+this design splits into two tables. None of that is in scope.
+
+The long form, including what was rejected and why, is in `docs/decisions.md` under
+*Booking and concurrency*.
 
 ## Development process
 
