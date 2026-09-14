@@ -205,16 +205,148 @@ On the deployed application: log in, book, watch it propagate to a second browse
 
 ## Done when
 
-- [ ] Every capability in `docs/requirements.md` §1 is reachable from the UI.
-- [ ] Booking a slot updates other viewers of that room with no refresh, deployed.
-- [ ] Switching rooms swaps groups on one connection, proven in the Network tab.
-- [ ] A reconnected client re-subscribes and refetches.
-- [ ] Admin-only screens are unreachable for a `User`, by nav and by URL.
-- [ ] The probe panel is gone and the transport diagnosis has a stated home.
-- [ ] `src/backend` has a zero diff.
-- [ ] `dotnet build` zero warnings; 23 + 6 tests green; `npm run build` clean.
-- [ ] `docs/decisions.md` carries this phase's decisions.
+- [x] Every capability in `docs/requirements.md` §1 is reachable from the UI.
+- [x] Booking a slot updates other viewers of that room with no refresh, deployed.
+- [x] Switching rooms swaps groups on one connection, proven in the Network tab.
+- [~] A reconnected client re-subscribes and refetches - **within the ~17 s retry window only**, and
+      re-tested only inside it. See the Outcome.
+- [x] Admin-only screens are unreachable for a `User`, by nav and by URL.
+- [x] The probe panel is gone and the transport diagnosis has a stated home.
+- [x] `src/backend` has a zero diff.
+- [x] `dotnet build` zero warnings; 23 + 6 tests green; `npm run build` clean.
+- [x] `docs/decisions.md` carries this phase's decisions.
 
 ## Outcome
 
-*To be written after the deployed check.*
+**Completed and deployed 2026-09-14.** Every screen `docs/requirements.md` §1 asks for is live at
+the deployed URL, real-time works across two browsers, and the Diagnostics page reports Azure
+SignalR as the transport with `accessToken: present`.
+
+Ten planned tasks became **fourteen commits**, and the phase cost more wall-clock time than the
+1-2 hour budget it was planned against. Both overruns have the same cause, recorded below because
+it is the useful part.
+
+### Verified
+
+- `dotnet build` clean, zero warnings. **23** unit and **6** integration tests green - unchanged,
+  because `src/backend` has a **zero diff** for the whole phase, provable from
+  `git diff --stat 61993b3 -- src/backend` being empty.
+- `npm run build` clean (`tsc --noEmit` then `vite build`). The bundle went 282 → 337 kB raw
+  (~102 kB gzipped), of which ~54 kB is react-router.
+- A **Node SignalR client against the running application**, run repeatedly through the phase and
+  finally through the **Vite proxy on :5173**: a booking reaches a subscriber of that room; the
+  payload is `{ roomId, slotId }` and nothing else; **after switching rooms on one connection, a
+  booking in the room just left is not delivered**; the newly joined room is; a replayed booking
+  answers 201 and announces nothing; another user booking a taken slot gets 409 `SlotAlreadyBooked`.
+- In two browsers, two accounts, one room, on the **deployed app**: booking propagates with no
+  refresh, in both directions. Deep links survive a hard refresh. Admin create, edit and delete
+  behave, including the refusal on a room holding a booking. A non-admin sees no admin nav and is
+  redirected from `/admin/bookings`.
+- The room switch was watched in the browser's Network tab: **one WebSocket, no second negotiate** -
+  which is what proves phase 6's carry was closed rather than re-implemented as a reconnect.
+
+### What went wrong, and what it cost
+
+The local verification found a real defect: `withAutomaticReconnect([0, 2000, 5000, 10000])` is a
+**finite list of four attempts**, so after ~17 seconds the client gave up permanently and the tab
+stayed live-looking and dead until reloaded. That window is shorter than a deploy - phase 5
+measured an App Service restart at ~10 s and phase 6 saw a 30-60 s cold start - so it was worth
+fixing, and phase 6's own reconnect check had passed only because its outage was 3.6 s.
+
+The fix was two parts: a retry policy that always returns a number, and a guard so `subscribe`
+restarts a connection it finds terminally disconnected rather than invoking on it. **The guard
+tested `connection.state`, which races with `startWithRetry` awaiting a delay before calling
+`start()`** - a second subscribe arriving in that window still sees `Disconnected`, clears the
+start promise, and starts the same connection twice. Live updates stopped entirely. Moving the
+reset into `onclose` removed that race, and the browser was *still* broken, at which point the
+whole fix was **rolled back to `331cbac`** rather than debugged further against a deadline.
+
+The rolled-back tree then failed in the browser too - and worked on the **production bundle served
+by the API at :5000**. That is the finding the phase turns on.
+
+### The dev-only defect, stated as the hypothesis it is
+
+With identical source, live updates work in the production build and are unreliable under Vite's
+dev server. The likely mechanism is React **StrictMode double-invoking effects**: `useRoomLiveUpdates`
+subscribes, is torn down mid-flight, and subscribes again, so the first pass's `unsubscribe` can
+resolve *after* the second pass registered its handler - deleting it from the connection's `rooms`
+map and sending `UnsubscribeFromRoom` for a room the live subscription still wants. The result is a
+connected socket in no group with no handler: no events, and **no console errors**, which is exactly
+what was observed.
+
+This is a hypothesis with strong circumstantial support, **not a proven root cause**. Evidence for:
+production works and development does not; the server-side probe passes in both, and it is the one
+thing that never exercises React's lifecycle. Evidence it is timing-dependent rather than
+deterministic: checks 1-4 passed on `:5173` earlier in the same session on the same code.
+
+**What would confirm it:** the WS frame log showing `SubscribeToRoom` followed by
+`UnsubscribeFromRoom` on page load, or a guard in the returned unsubscribe that refuses to act when
+a newer subscription owns the room - `if (rooms.get(roomId) !== handlers) return` - making the
+symptom disappear in development. That guard is the fix to try first, and it was deliberately not
+attempted today: two speculative fixes had already been shipped and rolled back, and the deadline
+was the wrong place for a third.
+
+### Accepted limitations
+
+- **The reconnect window is four attempts, ~17 seconds.** Inside it, recovery works. Beyond it the
+  client gives up and the tab needs a reload; the header says `Live updates off — reload`, which is
+  a workaround surfaced to the user rather than a fix. The scenario was deliberately not re-tested
+  after the rollback. It never affects the booking guarantee, conflict handling, or live updates in
+  normal use - only recovery from an outage.
+- **Live updates are unreliable under `npm run dev`.** Development verification of anything
+  real-time should be done against `:5000` after `npm run build` until the guard above is added.
+
+### Deviations from the plan
+
+- **Ten code commits rather than eight.** Splitting them so every commit left the tree building put
+  the router wiring - `main.tsx` and `App.tsx`, which is also where the probe panel dies - *after*
+  the pages it imports, rather than first as the plan listed.
+- **Four commits the plan did not list**: two fixes that were rolled back, the shell-readability and
+  error-message pass that came out of smoke testing, and a favicon.
+- **The whole-horizon fetch decision was made at planning time and held**, and it paid twice: no
+  day-boundary arithmetic in the browser, and a live update that is one array edit.
+
+### Learned, and not anticipated by this document
+
+- **A green server-side probe can pass throughout while the application is broken in a browser.**
+  The Node client proved the hub, the groups, the payload, room scoping and the proxy - and was
+  green during every minute the app did not work. It cannot see React's lifecycle, and that is where
+  the defect was. A probe proves the half of the system it touches, and it is worth saying out loud
+  which half that is.
+- **StrictMode is a test the production build never runs.** It exists to surface exactly this class
+  of bug, and a subscription whose teardown is asynchronous is precisely what it targets. The
+  lesson is not to disable it: it found a real ordering weakness in the module's ownership model.
+- **`pkill -f` matches by pattern, not by who started the process.** Stopping "my" dev servers
+  killed the user's, and the resulting `ECONNREFUSED` wall looked like an application fault for
+  several minutes.
+- **The error body has two shapes and the client must read both.** A validation failure answers
+  `ValidationProblemDetails`, whose messages sit under `errors` keyed by field while `title` is the
+  framework's generic sentence; `errorDetails` - which the client read exclusively - is only ever
+  present on a *business* failure. Too large a capacity therefore surfaced "One or more validation
+  errors occurred." and discarded "'Capacity' must be between 1 and 1000."
+- **Identity's password codes reach the screen by design**, a consequence `docs/decisions.md`
+  recorded in phase 3 and which only became visible when a person used the form.
+- **Tailwind 4's preflight sets `cursor: default` on buttons**, following the CSS spec. One base
+  rule restores it everywhere; per-component classes would have to be remembered.
+- **A status label should name a property of the page, not of the transport.** "Connected" is the
+  SignalR client's word; what a reader needs is whether the screen updates itself, and what to do
+  when it does not.
+
+### Carried into later phases
+
+- **Fix the dev-mode subscription race**, starting with the ownership guard in `subscribe`'s
+  returned unsubscribe. Confirm by the WS frame log rather than by the symptom disappearing.
+- **Restore indefinite reconnection** once that is done - the retry policy itself was never shown to
+  be wrong, and it was verified across a 55-second outage before the rollback took it out.
+- **Phase 8's README** must name the screens, point `/diagnostics` at its new home, and carry what
+  phases 5 and 6 sent forward: the query-string token defence, that Azure SignalR was verified by
+  the client's socket URL, the unique `(RoomId, StartUtc)` index being seeder integrity only, that a
+  repeat booking answers 201, and why the overlap assertion exists. The reconnect limitation above
+  belongs there too.
+- **Housekeeping:** verification consumed roughly ten slots in *Board Room* and *Focus Room* across
+  2026-09-27 and neighbouring days, and registered `p7a@example.test` / `p7b@example.test` plus
+  `weak-probe@example.test` in the development database. Bookings cannot be cancelled; the slots are
+  gone.
+- **`develop` is one commit behind `main`** (`d1dfd38 feat(web): add a favicon`, committed on
+  `main`). Fast-forward `develop` before branching phase 8, or that branch starts without it.
+
