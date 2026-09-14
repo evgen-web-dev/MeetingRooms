@@ -33,6 +33,18 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   injected wherever time is needed; nothing below `Program.cs` reads `DateTime.UtcNow`
   directly. This is what lets the booking timestamp be controlled from a test without
   reaching for a static.
+- **Mapping between entities and DTOs is hand-written. No mapper library.**
+
+  > *Settled during phase 4.* The reference project uses Mapster configured per-property
+  > with `.IgnoreNonMapped(true)`, which is the correct way to use it — convention-based
+  > mapping is how a new entity property silently starts appearing on the wire. But
+  > per-property configuration is one line per property either way, so the line count
+  > matches hand-written construction and the package is pure addition on top of it. A
+  > constructor call also makes a property rename a compile error rather than a runtime
+  > one, keeps `IMapper` out of every constructor, and leaves nothing to mock — the
+  > reference project mocks `IMapper` in its unit tests, so its mapping config is covered
+  > by nothing. **Revisit if a later phase's DTOs reach eight to ten fields across several
+  > types**, which is where a configured mapper starts paying rent.
 
 ## API surface and errors
 
@@ -81,6 +93,27 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   status is the contract; overriding correct framework behaviour to add a body is
   machinery. Stated here so the absence reads as a decision.
 
+- **A read that cannot fail returns its value, not an `OperationResult`.** The result type
+  exists to carry business failures; wrapping a read with no failure branch makes every
+  caller handle a path that does not exist. `IRoomService.ListRoomsAsync` returns
+  `IReadOnlyList<RoomResponse>` for this reason, while every other method on that service
+  has a real failure and is wrapped.
+- **The schedule range is two optional UTC instants**, `fromUtc` and `toUtc`, bound as
+  `DateTimeOffset?`. Absent bounds mean the whole current window, resolved server-side, so
+  a client never computes where a local day begins in UTC.
+
+  > *Settled during phase 4.* `DateTimeOffset` rather than `DateTime` because MVC binds a
+  > query-string `DateTime` with `DateTimeStyles.RoundtripKind`: a trailing `Z` arrives as
+  > `Kind.Utc`, an explicit offset as `Kind.Local`, a bare date as `Unspecified` — three
+  > kinds to normalise, and a silent, hours-wrong bug if one is missed. Verified end to end
+  > that both `...Z` and `...+03:00` forms bind to the same window.
+
+- **The display zone is named once per schedule response** as `timeZoneId`, and never
+  stored per row. Nothing creates a slot from a browser, so there is no per-slot zone to
+  record; the client needs to know how to render, and a constant held in both the generator
+  and the formatter is how the two drift apart. Not a per-slot UTC offset either — that is
+  derived data that changes at a DST boundary and can disagree with itself.
+
 ## Validation
 
 - **FluentValidation**, with validators applied in **one place — a global MVC action
@@ -121,6 +154,44 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   user-initiated transactions.
 - **`IEntityTypeConfiguration<T>` + `modelBuilder.ApplyConfigurationsFromAssembly`**,
   with zero data annotations on entities.
+- **Entity types are reached through `Set<T>()`; the context declares no `DbSet`
+  properties of its own.** The assembly scan above already discovers every entity, so a
+  property would be a second registration mechanism to remember, and `AppDbContext` never
+  leaves Infrastructure — nothing outside two repositories would consume it. Table names
+  are explicit via `ToTable`, so no table name depends on a C# property name.
+
+  > *The trade, stated because it is real:* `Set<Foo>()` for a type that is not in the
+  > model compiles and throws at runtime, where a missing `DbSet` property would not
+  > compile. An unconfigured entity would also have no table and no migration, so it fails
+  > immediately in development. Note also that `IdentityDbContext` contributes `Users`,
+  > `Roles` and friends regardless, so this keeps the context's *own* surface narrow rather
+  > than the whole surface.
+
+- **Instants read back from `datetime2` have their `DateTimeKind` restored by a value
+  converter**, declared in `SlotEntityTypeConfiguration` and applied to every instant
+  column.
+
+  > *Found in phase 4 by verifying rather than assuming.* `datetime2` stores no zone, so
+  > EF materialises these columns as `Unspecified`. The value is correct and the label is
+  > gone — invisible in C#, where the two compare equal, and very visible on the wire:
+  > `System.Text.Json` writes an `Unspecified` instant with no trailing `Z`, and a browser
+  > parsing `"2026-09-14T05:00:00"` reads it as **local** time and shifts every slot by the
+  > viewer's offset. The converter lives in the configuration rather than at each mapping
+  > site so that no read path can forget it. Its provider-side expression is the identity,
+  > so stored values, generated SQL and the schema are all unchanged.
+
+- **The slot horizon is rolling, not fixed at first seeding**, kept current by an
+  idempotent top-up that runs at startup after the seeders. Every room's window is
+  `[today, today+14)` in the display zone, so a room created later is aligned with the rest
+  rather than ending earlier, and nothing goes empty if a review window slips. One read for
+  the `(RoomId, StartUtc)` pairs already present, a set difference, one insert for the
+  remainder; the unique index is the backstop.
+- **No explicit index is declared on `Slot.BookedByUserId`.** EF Core creates an index for
+  every foreign key, so declaring the one `docs/plan.md` lists for "my bookings" would be
+  documentation rather than schema. Confirmed in the generated migration.
+- **A room carries a name and a capacity and nothing else, and its name is not unique.**
+  `docs/requirements.md` §2 asks for no more, and a unique name would buy a conflict error
+  code plus a failure path on both create and edit for nothing.
 - **Times are stored UTC as `datetime2(0)`** and displayed in Europe/Kyiv.
   Note: SQL Server's `timestamp` is a synonym for `rowversion`, not a date/time type.
 
@@ -130,6 +201,33 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   > legible to whoever opens the deployed application. `assignment.md` is silent on time
   > zones, so this amends `docs/requirements.md` §3 and §7 without touching anything
   > authoritative.
+
+## Time
+
+Storage type is under *Persistence*; this is about meaning.
+
+- **One fixed display zone, `Europe/Kyiv`**, for every user and every room
+  (`docs/requirements.md` §7). Rendering in each viewer's own zone was considered and
+  rejected: the grid's defining property is that it runs 08:00–18:00, and that stops being
+  legible the moment two viewers see different hours for the same slot.
+- **The zone is resolved once into a static**, trying the IANA id and then the Windows id
+  `FLE Standard Time` before throwing with both names and the likely cause.
+  `FindSystemTimeZoneById` reads from the OS on every call, and the failure it throws on a
+  host with no time-zone database — or one running under invariant globalization — is
+  otherwise an unreadable startup crash.
+- **The working day excludes the daylight-saving transition hour by construction.** The EU
+  switches at 03:00/04:00 local; 08:00–18:00 never contains that, so the generator can never
+  be handed a local time that does not exist (spring forward) or happens twice (autumn
+  back) — the two cases `TimeZoneInfo.ConvertTimeToUtc` resolves by rule rather than by
+  intent. A slot's UTC instant therefore moves by an hour across a boundary while its local
+  hour does not: 08:00 Kyiv is 05:00Z in summer and 06:00Z in winter.
+- **Slot generation is pure and takes the zone as a parameter**, which is what makes both
+  2026 transition days testable without waiting for them. It is also the only logic in the
+  phase covered by unit tests, per *Testing*.
+- **Local wall-clock values are built with `DateTimeKind.Unspecified`.** That is required,
+  not stylistic: `ConvertTimeToUtc` throws when a value's `Kind` contradicts the zone
+  argument, and `Unspecified` is the only kind meaning "a reading to interpret in this
+  zone".
 
 ## Booking and concurrency
 
@@ -167,6 +265,21 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
 - **Accepted limitation:** the invariant lives in one statement's `WHERE` clause
   rather than in a standing constraint, so `TryClaimAsync` must remain the only write
   path to `BookedByUserId`. Stated in the README rather than omitted.
+- **Nothing seeds a booking**, in any environment. A seeder writing `BookedByUserId`
+  directly would force the sentence above to grow a qualifier, in exchange for a demo
+  screen looking fuller. Demo *rooms* are seeded; their slots all start free.
+- **Deleting a room with any booked slot is refused** — `RoomHasBookedSlots` → 409, not a
+  cascade. `docs/requirements.md` §4 says bookings cannot be cancelled, rescheduled or
+  modified, so removing the room out from under one would be a cancellation by another
+  name, and a silent one. 409 rather than 403 because the caller is permitted to delete
+  rooms; this one is refused on account of state.
+- **That refusal is itself an atomic conditional delete**, folding the condition into the
+  `WHERE` clause exactly as the booking claim does, so no slot can be booked between
+  deciding and deleting. The rows-affected count distinguishes success; a second query runs
+  only on the failure path, to tell 404 from 409. Verified against SQL Server: it translates
+  to `NOT EXISTS`, and the slots disappear through the database's `ON DELETE CASCADE` —
+  `ExecuteDelete` never runs an EF-side cascade, so a `ClientCascade` relationship would
+  fail here on a foreign-key violation instead.
 
 ## Authentication and identity
 
@@ -400,7 +513,17 @@ Previously open, now closed:
 
 ## Still open
 
-- Room fields beyond name and capacity, if any prove useful.
 - Frontend routing structure and screen breakdown — deliberately deferred to phase 7.
 - The exact `dotnet ef database update` invocation for the post-phase-3 migration
   flip; a ten-minute detail, not a design decision.
+- **Phase 5 must decide the retry-after-commit case.** `EnableRetryOnFailure` replays an
+  operation when a transient fault lands after the commit but before the acknowledgement.
+  For the booking claim that does not break the invariant — nothing double-books — but it
+  misreports: the replayed conditional `UPDATE` finds the slot already booked by its own
+  winning write, matches zero rows, and the caller who actually won is told 409. Re-reading
+  the row and checking whether `BookedByUserId` is the caller's own before concluding
+  conflict is the obvious answer; it needs deciding deliberately rather than being
+  discovered during verification.
+
+*Closed by phase 4:* room fields beyond name and capacity — there are none, and the name is
+not unique (see *Persistence*).
