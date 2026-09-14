@@ -144,6 +144,39 @@ public static class DependencyInjectionExtensions
                         $"{JwtOptions.SectionName}:{nameof(JwtOptions.SigningKey)} is unusable.");
                 }
 
+                // How the token arrives, as opposed to how it is validated. A browser cannot set
+                // headers on a WebSocket handshake - the WebSocket API has no such option - so the
+                // SignalR client appends the token to the query string instead, and this is
+                // ASP.NET Core's documented answer to that.
+                //
+                // Scoped to /hubs on purpose. A query string is the worst place to carry a
+                // credential: it reaches server and proxy access logs, which a header does not.
+                // Confining it to the hub paths means the REST API never accepts one, so the
+                // exposure is one route rather than the whole surface. It is inside TLS on the
+                // wire, and it reaches no browser history and no Referer header, because this URL
+                // is opened by a script rather than navigated to.
+                //
+                // On the deployed app this path is rarer than it looks: under Azure SignalR the
+                // socket terminates at the service, so the browser carries the *service's* token
+                // there and this application's JWT travels on the negotiate request, as an
+                // ordinary Authorization header. This is what the in-process fallback uses, and
+                // what a downgrade to Server-Sent Events would use. See docs/decisions.md.
+                bearerOptions.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        var accessToken = context.Request.Query["access_token"];
+
+                        if (!string.IsNullOrEmpty(accessToken)
+                            && context.Request.Path.StartsWithSegments("/hubs"))
+                        {
+                            context.Token = accessToken;
+                        }
+
+                        return Task.CompletedTask;
+                    }
+                };
+
                 // Without this, the legacy JWT to WS-Federation map rewrites "sub" and "role"
                 // into URI claim types on the way in, so the claims read back are not the
                 // claims that were issued.
