@@ -1,7 +1,11 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using MeetingRooms.Application.DTOs.Auth;
+using MeetingRooms.Application.DTOs.Bookings;
 using MeetingRooms.Application.DTOs.Rooms;
+using MeetingRooms.Domain.Entities;
+using MeetingRooms.Infrastructure.Persistence;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeetingRooms.ConcurrencyTests;
 
@@ -76,16 +80,66 @@ public sealed class BookingScenario : IAsyncLifetime
     }
 
     /// <summary>
-    /// The room's whole grid. Callers pick from the far end of it, where no clock boundary can
-    /// make a test flaky.
+    /// The shared race room's grid. Callers pick from the far end of it, where no clock boundary
+    /// can make a test flaky.
     /// </summary>
-    public async Task<ScheduleResponse> GetScheduleAsync(string token, CancellationToken cancellationToken)
+    public Task<ScheduleResponse> GetScheduleAsync(string token, CancellationToken cancellationToken) =>
+        GetScheduleAsync(RoomId, token, cancellationToken);
+
+    public async Task<ScheduleResponse> GetScheduleAsync(int roomId, string token, CancellationToken cancellationToken)
     {
         using var client = CreateClientFor(token);
 
         return await client.GetFromJsonAsync<ScheduleResponse>(
-                   $"/api/rooms/{RoomId}/schedule", cancellationToken)
+                   $"/api/rooms/{roomId}/schedule", cancellationToken)
                ?? throw new InvalidOperationException("The schedule response was empty.");
+    }
+
+    /// <summary>
+    /// A room of this test's own, with its own grid. Tests that book use one rather than the
+    /// shared race room: a booking cannot be undone, so shared state here would mean tests
+    /// consuming each other's slots.
+    /// </summary>
+    public async Task<RoomResponse> CreateRoomAsync(CancellationToken cancellationToken)
+    {
+        using var client = Factory.CreateClient();
+
+        return await CreateRoomAsync(client, AdminToken);
+    }
+
+    /// <summary>
+    /// Inserts one slot straight through the context, which is how the window-dependent cases stay
+    /// deterministic at any hour of the day without a substituted clock.
+    /// <para>
+    /// Writing a <em>slot</em> row directly is legitimate: the standing rule is that nothing but
+    /// <c>TryClaimAsync</c> writes <c>BookedByUserId</c>, and this writes a free slot. The seconds
+    /// component keeps it clear of the unique (RoomId, StartUtc) index, since every generated slot
+    /// starts exactly on the hour.
+    /// </para>
+    /// </summary>
+    public async Task<int> InsertFreeSlotAsync(
+        int roomId,
+        DateTime startUtc,
+        DateTime endUtc,
+        CancellationToken cancellationToken)
+    {
+        using var scope = Factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var slot = new Slot { RoomId = roomId, StartUtc = startUtc, EndUtc = endUtc };
+
+        dbContext.Set<Slot>().Add(slot);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return slot.Id;
+    }
+
+    /// <summary>One booking attempt, returned unread so a test can assert on status and body.</summary>
+    public async Task<HttpResponseMessage> BookAsync(string token, int slotId, CancellationToken cancellationToken)
+    {
+        using var client = CreateClientFor(token);
+
+        return await client.PostAsJsonAsync("/api/bookings", new BookSlotRequest(slotId), cancellationToken);
     }
 
     private static async Task RegisterAsync(HttpClient client, string email, string password)
