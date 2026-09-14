@@ -466,7 +466,73 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
   new status only — no personal data.
 - The hub authenticates from the JWT, which browsers deliver as an `access_token`
   query-string parameter (WebSockets cannot set headers), read server-side in
-  `JwtBearerOptions.Events.OnMessageReceived`.
+  `JwtBearerOptions.Events.OnMessageReceived`. **The handler accepts it only when the path starts
+  with `/hubs`**, so the REST API never takes a credential from a query string.
+
+  > *The exposure, stated so it can be defended rather than hoped past.* A query string can leak
+  > through browser history, `Referer` headers and access logs. The first two do not apply here —
+  > the URL is opened by a script, never navigated to — so the real exposure is **logs**, server and
+  > proxy side; it is inside TLS on the wire. On the deployed app the socket terminates at Azure
+  > SignalR, so the browser carries the *service's* token there and this application's JWT travels
+  > on negotiate as an ordinary `Authorization` header; the query-string path is what the
+  > in-process fallback and an SSE downgrade use. The residual risk is real: an eight-hour token in
+  > an access log is an eight-hour credential. The proper hardening is a short-lived hub ticket
+  > minted at negotiate, which is a second token type and did not fit this scope. Note also that
+  > the same JWT already sits in `localStorage` by the decision under *Frontend*, which is the
+  > larger hole of the two.
+
+- **Only a real state change is announced.** The notifier fires on `SlotClaimOutcome.Claimed`
+  alone, never on `AlreadyClaimedByCaller`. Both are a *successful* `OperationResult`, which is
+  exactly why "announce whenever the booking succeeded" is the wrong reading: it compiles, passes
+  every HTTP test in the solution, and emits an event each time a caller re-posts a booking they
+  already hold — when the row did not move. The guard also short-circuits ahead of the room read,
+  so a replay costs no extra round trip either.
+- **A failed announcement never fails a committed booking.** `SignalRScheduleNotifier` catches,
+  logs at error, and returns; the caller still receives 201. The accepted consequence is that other
+  viewers stay stale until they read the schedule again. Letting it bubble instead would answer the
+  one caller who *did* get the room with a 500 describing a booking that exists and is theirs —
+  the more damaging of the two lies. The catch lives in the adapter because that is the layer which
+  owns the transport and has a logger; `IScheduleNotifier` states "implementations must not throw"
+  as the contract that makes a single catch sufficient. A second catch in Application would have to
+  be **silent**, that layer having no logger without a new package, and a silent swallow is worse
+  than the contract it duplicates.
+- **`IScheduleNotifier` takes no `CancellationToken`**, against the grain of every other
+  asynchronous method here. The token available at the call site is the booking request's, and that
+  one is cancelled when the caller's connection drops — so forwarding it would let a booker closing
+  their tab withhold the announcement from everybody else, for a write that already happened.
+- **The room id is read separately, and the claim statement is untouched.** `TryClaimAsync` reports
+  a row count rather than a row, and a per-room group needs the room. A second port method,
+  `GetRoomIdAsync`, pays one primary-key seek on the winning path and leaves phase 5's graded
+  `UPDATE` byte-for-byte as verified. Rejected: folding the read into the claim (edits the statement
+  the README quotes), `UPDATE … OUTPUT INSERTED.RoomId` (hand-maintained SQL on the graded path),
+  and taking the room from the request — unverified client data steering a broadcast, where a
+  mismatched id delivers the event to another room's viewers.
+- **The payload is `{ roomId, slotId }` and nothing else.** No booker identity: `requirements.md`
+  §5 says a caller learns that a slot is taken and separately whether they took it, and an event
+  naming the booker would broadcast to the whole room precisely what the schedule endpoint
+  withholds. No status flag: the event's name is the status, and free-to-booked is the only
+  transition there is. `roomId` rides along even though the group implies it, because a client
+  watching two rooms receives both through one handler and the client library does not say which
+  subscription delivered an event.
+
+  > *Accepted consequence.* A booker's **second tab** shows the slot as booked but not as *theirs*
+  > until it refetches. The only fixes are an identity field the visibility rule forbids, or
+  > per-user targeting for a cosmetic difference — neither earns its keep.
+
+- **Group membership belongs to the connection, so a reconnect must re-subscribe _and_ refetch.**
+  A reconnected client is in no groups at all, and anything announced while it was away was never
+  delivered and is never replayed. Re-subscribing alone fixes the first half and silently leaves
+  the second, which is the failure most likely to pass a casual demo. Verified rather than
+  reasoned: a client that reconnects without re-subscribing receives nothing, and receives events
+  again the moment it does.
+- **Room create, update and delete do not broadcast.** §6 is about slot status; the room list is
+  not live, and an administrator's change is picked up on the next read.
+- **The hub's JSON naming policy is pinned explicitly.** SignalR's JSON protocol is configured
+  independently of MVC's, so the API's camelCase does not carry over by construction. Measured
+  rather than assumed: with `AddJsonProtocol` removed the hub still emits `{ roomId, slotId }`, so
+  the call is a pin against the two defaults ever diverging, not a fix for a live defect. Kept
+  because what it prevents is silent and runtime-only — `SlotId` arriving where the browser reads
+  `slotId`, with nothing failing server-side.
 
 ## Frontend
 
@@ -495,6 +561,22 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
 - **The JWT is held in `localStorage`**, with the XSS exposure written into the README
   rather than hidden. In-memory storage is safer but needs refresh tokens, which are
   out of scope.
+- **`@microsoft/signalr` 10.0.11**, pinned exactly like every other dependency here rather than
+  left on npm's default caret — `npm ci` installs the lockfile either way, but a caret lets a later
+  `npm install` drift the client off the 10.0.x server line with nothing in the diff saying why.
+  It cost ~60 kB raw on the bundle (222 → 282 kB). Its Node-only transitive packages — `ws`,
+  `node-fetch`, `tough-cookie` and friends — are **not** bundled, but the client's dead Node branch
+  names them in dynamic `require` calls, so they are greppable in the output and that is expected
+  rather than a leak.
+- **The phase 6 live panel is scaffolding, and phase 7 deletes it.** It holds its token in
+  component state rather than `localStorage`: the decision above belongs to phase 7's auth context,
+  and a throwaway probe should not be the first thing to implement a standing decision.
+- **A SignalR client handler must not return a value.** TypeScript permits returning one where
+  `void` is expected, and the client reads any returned value as a result for an invocation —
+  logging `Result given for 'slotbooked' method but server is not expecting a result`.
+  `scheduleConnection.ts` therefore wraps the caller's handler in a block, so the class of bug is
+  removed rather than avoided by convention. Found by running a client whose handler was a one-line
+  arrow.
 
 ## Testing
 
@@ -536,6 +618,16 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
   when the generated grid happens to contain no expired slot. Deterministic at any hour, with no
   substituted clock. Writing a *free slot* row is not a booking — the standing rule is only that
   nothing but `TryClaimAsync` writes `BookedByUserId`.
+- **Which claim outcomes announce is pinned by unit tests over hand-written fakes.**
+  `BookingServiceNotificationTests` covers `Claimed` (exactly one announcement, carrying the room
+  the repository reported), `AlreadyClaimedByCaller` (none, and no room read either), the three
+  refusals, and the unreachable null-room-id branch. No mocking package: the port has five members
+  and two of them matter. The probe is the point — rewriting the guard as "announce whenever the
+  booking succeeded" reddens exactly one test.
+- **No end-to-end hub test in the solution.** One would need the SignalR .NET client package and a
+  connection over the test server, and it is timing-sensitive on a four-day deadline. The routing
+  it would prove was exercised instead by a throwaway client against the running application, and
+  by the two-browser check — both recorded in the phase 6 document rather than committed.
 - **CI runs the unit project only.** `.github/workflows/deploy.yml` still builds the whole solution,
   so a compile break anywhere fails there; but the concurrency project needs a real SQL Server the
   runner does not have. Assignment #6 asks for a test in the repository that the reviewer can run,
