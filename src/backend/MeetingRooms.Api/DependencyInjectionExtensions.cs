@@ -1,7 +1,10 @@
+using System.Text.Json;
 using FluentValidation;
 using MeetingRooms.Api.Errors;
 using MeetingRooms.Api.ExceptionHandlers;
+using MeetingRooms.Api.Realtime;
 using MeetingRooms.Application.Auth;
+using MeetingRooms.Application.Interfaces;
 using MeetingRooms.Application.Options;
 using MeetingRooms.Application.Results;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -44,6 +47,14 @@ public static class DependencyInjectionExtensions
 
         var signalRBuilder = services.AddSignalR();
 
+        // Pinned rather than inherited. SignalR's JSON protocol is configured independently of
+        // MVC's, so the camelCase that every REST response uses does not carry over by
+        // construction. Setting it here is what keeps one wire style across the API and the hub;
+        // the failure mode otherwise is silent and only visible at runtime - `SlotId` arriving
+        // where the browser reads `slotId`.
+        signalRBuilder.AddJsonProtocol(options =>
+            options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
+
         // The key AddAzureSignalR() reads by default. In Azure it arrives as the app
         // setting Azure__SignalR__ConnectionString.
         var azureSignalRConnectionString = configuration["Azure:SignalR:ConnectionString"];
@@ -52,6 +63,12 @@ public static class DependencyInjectionExtensions
         {
             signalRBuilder.AddAzureSignalR();
         }
+
+        // The adapter behind Application's IScheduleNotifier port, registered by the layer that
+        // implements it. Singleton: it holds no state, and the IHubContext it wraps is one too.
+        // BookingService is scoped and will depend on it, which is fine - a scoped service may
+        // resolve a singleton; only the reverse is a lifetime bug.
+        services.AddSingleton<IScheduleNotifier, SignalRScheduleNotifier>();
 
         return services;
     }
