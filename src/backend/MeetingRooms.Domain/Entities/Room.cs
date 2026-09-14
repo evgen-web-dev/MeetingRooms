@@ -6,6 +6,13 @@ namespace MeetingRooms.Domain.Entities;
 /// </summary>
 public sealed class Room
 {
+    /// <summary>
+    /// Long enough for any name a person would type, short enough to index. Declared here rather
+    /// than in the EF configuration because the request validator needs the same number, and two
+    /// copies is how a column and the rule guarding it drift apart.
+    /// </summary>
+    public const int NameMaxLength = 100;
+
     public int Id { get; set; }
 
     public required string Name { get; set; }

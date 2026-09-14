@@ -6,9 +6,6 @@ namespace MeetingRooms.Infrastructure.EntityTypeConfigurations;
 
 public sealed class RoomEntityTypeConfiguration : IEntityTypeConfiguration<Room>
 {
-    /// <summary>Long enough for any room name a person would type, short enough to index.</summary>
-    private const int NameMaxLength = 100;
-
     public void Configure(EntityTypeBuilder<Room> builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -21,7 +18,7 @@ public sealed class RoomEntityTypeConfiguration : IEntityTypeConfiguration<Room>
 
         builder.Property(room => room.Name)
             .IsRequired()
-            .HasMaxLength(NameMaxLength);
+            .HasMaxLength(Room.NameMaxLength);
 
         // Capacity needs no configuration: a non-nullable int is NOT NULL by convention, and
         // the 1-1000 bound is a request rule, enforced by the validator where it can be reported
