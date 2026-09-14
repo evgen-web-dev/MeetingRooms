@@ -49,9 +49,11 @@ public static class DependencyInjectionExtensions
 
         // Pinned rather than inherited. SignalR's JSON protocol is configured independently of
         // MVC's, so the camelCase that every REST response uses does not carry over by
-        // construction. Setting it here is what keeps one wire style across the API and the hub;
-        // the failure mode otherwise is silent and only visible at runtime - `SlotId` arriving
-        // where the browser reads `slotId`.
+        // construction - it is a separate default that happens to agree. Measured, not assumed:
+        // with this call removed the hub still emits { roomId, slotId }, so this is a pin against
+        // the two defaults ever diverging rather than a fix for a live defect. Kept because the
+        // failure it prevents is silent and runtime-only - `SlotId` arriving where the browser
+        // reads `slotId`, with nothing failing on the server.
         signalRBuilder.AddJsonProtocol(options =>
             options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
 
