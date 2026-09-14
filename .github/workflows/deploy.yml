@@ -26,6 +26,13 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
 
+      # Ahead of the frontend build so a red test fails the run before npm install spends
+      # a minute. This gates the deploy, not the merge - the workflow only triggers on
+      # main, by which point the merge has happened - so it is a backstop, not a substitute
+      # for running the suite locally before merging.
+      - name: Test
+        run: dotnet test --configuration Release
+
       # Must run before the publish below: Vite writes into the API project's wwwroot,
       # and MSBuild globs that directory when the publish runs. Reversing these two steps
       # produces a deploy with no frontend and no error.
