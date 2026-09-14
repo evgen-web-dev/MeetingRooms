@@ -37,7 +37,18 @@ public static class ErrorStatusCodeMapper
 
             // 409 rather than 403: the caller is allowed to delete rooms, and this one is
             // refused because of state - a booking that cannot be cancelled - not permission.
-            [RoomErrorCodes.RoomHasBookedSlots] = StatusCodes.Status409Conflict
+            [RoomErrorCodes.RoomHasBookedSlots] = StatusCodes.Status409Conflict,
+
+            [BookingErrorCodes.SlotNotFound] = StatusCodes.Status404NotFound,
+
+            // The conflict contract the assignment names, and 409 rather than 400 for the same
+            // reason as the row above: the request is well formed and the caller is permitted -
+            // somebody else simply got there first.
+            [BookingErrorCodes.SlotAlreadyBooked] = StatusCodes.Status409Conflict,
+
+            // Also state rather than input. The slot exists and the request said nothing wrong;
+            // the window it names has closed.
+            [BookingErrorCodes.SlotHasEnded] = StatusCodes.Status409Conflict
         };
 
         // Every password-policy failure is the same answer - the submitted password is not
