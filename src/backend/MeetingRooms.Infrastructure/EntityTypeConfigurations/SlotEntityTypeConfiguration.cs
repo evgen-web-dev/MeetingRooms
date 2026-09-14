@@ -1,6 +1,7 @@
 using MeetingRooms.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace MeetingRooms.Infrastructure.EntityTypeConfigurations;
 
@@ -13,6 +14,25 @@ public sealed class SlotEntityTypeConfiguration : IEntityTypeConfiguration<Slot>
     /// </summary>
     private const string InstantColumnType = "datetime2(0)";
 
+    /// <summary>
+    /// Stamps <see cref="DateTimeKind.Utc"/> back onto every instant read from the database.
+    /// <para>
+    /// SQL Server's <c>datetime2</c> stores no zone, so EF materialises these columns as
+    /// <see cref="DateTimeKind.Unspecified"/> - the value is right and the label is missing. That
+    /// is invisible in C#, where the two compare equal, and not invisible at all on the wire:
+    /// <c>System.Text.Json</c> writes an Unspecified instant with no trailing <c>Z</c>, and a
+    /// browser parsing <c>"2026-09-14T05:00:00"</c> reads it as local time and shifts every slot
+    /// by the viewer's offset.
+    /// </para>
+    /// <para>
+    /// Applied here rather than at each mapping site so that no read path can forget it, phase
+    /// 5's included. The provider-side expression is the identity, so nothing about the stored
+    /// value or the generated SQL changes.
+    /// </para>
+    /// </summary>
+    private static readonly ValueConverter<DateTime, DateTime> UtcInstantConverter =
+        new(instant => instant, instant => DateTime.SpecifyKind(instant, DateTimeKind.Utc));
+
     public void Configure(EntityTypeBuilder<Slot> builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -23,14 +43,19 @@ public sealed class SlotEntityTypeConfiguration : IEntityTypeConfiguration<Slot>
 
         builder.Property(slot => slot.StartUtc)
             .HasColumnType(InstantColumnType)
+            .HasConversion(UtcInstantConverter)
             .IsRequired();
 
         builder.Property(slot => slot.EndUtc)
             .HasColumnType(InstantColumnType)
+            .HasConversion(UtcInstantConverter)
             .IsRequired();
 
+        // A nullable property takes the same non-nullable converter: EF applies it to values and
+        // passes null straight through.
         builder.Property(slot => slot.BookedAtUtc)
-            .HasColumnType(InstantColumnType);
+            .HasColumnType(InstantColumnType)
+            .HasConversion(UtcInstantConverter);
 
         // Deleting a room takes its grid with it. Admins may only delete a room that has no
         // booked slot - refused with RoomHasBookedSlots - so this can never silently erase
