@@ -25,9 +25,10 @@ public sealed class AppDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         // the base implementation is what maps AspNetUsers, AspNetRoles and the join tables.
         base.OnModelCreating(modelBuilder);
 
-        // Finds nothing yet: the first IEntityTypeConfiguration arrives with Room and Slot in
-        // phase 4. It is here now so that adding one is only ever adding a file, and so that no
-        // entity is ever configured by data annotations instead (docs/decisions.md).
+        // Picks up every IEntityTypeConfiguration in this assembly - Room and Slot today. Adding
+        // an entity is therefore only ever adding a file, and no entity is ever configured by
+        // data annotations instead (docs/decisions.md). It is also what discovers the two
+        // entity types at all: neither has a DbSet property on this context.
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
     }
 }
