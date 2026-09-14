@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- xUnit v3 test projects are self-hosting executables, not class libraries. -->
+    <OutputType>Exe</OutputType>
+
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+
+    <!-- Not plain xunit.v3: that variant enables Microsoft.Testing.Platform, and this
+         solution runs tests through VSTest. The two are not interchangeable. -->
+    <PackageReference Include="xunit.v3.mtp-off" Version="3.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\backend\MeetingRooms.Domain\MeetingRooms.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

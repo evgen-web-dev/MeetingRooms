@@ -31,7 +31,13 @@ public static class ErrorStatusCodeMapper
 
             // 409 rather than 400: the request is well formed, and conflicts with state that
             // already exists.
-            [AuthErrorCodes.EmailAlreadyRegistered] = StatusCodes.Status409Conflict
+            [AuthErrorCodes.EmailAlreadyRegistered] = StatusCodes.Status409Conflict,
+
+            [RoomErrorCodes.RoomNotFound] = StatusCodes.Status404NotFound,
+
+            // 409 rather than 403: the caller is allowed to delete rooms, and this one is
+            // refused because of state - a booking that cannot be cancelled - not permission.
+            [RoomErrorCodes.RoomHasBookedSlots] = StatusCodes.Status409Conflict
         };
 
         // Every password-policy failure is the same answer - the submitted password is not

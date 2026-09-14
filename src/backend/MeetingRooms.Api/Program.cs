@@ -50,6 +50,12 @@ await using (var startupScope = app.Services.CreateAsyncScope())
 
     await IdentitySeeder.SeedRolesAsync(startupScope.ServiceProvider);
     await IdentitySeeder.SeedAdminAsync(startupScope.ServiceProvider, app.Environment.IsDevelopment());
+
+    // Rooms before slots, for the same reason: the top-up fills the grid of whatever rooms
+    // exist, seeded or created through the API. It runs on every start rather than only after
+    // seeding, which is what keeps the horizon rolling instead of frozen at first seeding.
+    await RoomSeeder.SeedDemoRoomsAsync(startupScope.ServiceProvider);
+    await SlotGridTopUp.RunAsync(startupScope.ServiceProvider);
 }
 
 // First in the pipeline, so it sees every exception thrown by anything below it.

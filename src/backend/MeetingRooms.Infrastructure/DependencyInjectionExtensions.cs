@@ -3,6 +3,7 @@ using MeetingRooms.Application.Options;
 using MeetingRooms.Domain.Entities;
 using MeetingRooms.Infrastructure.Identity;
 using MeetingRooms.Infrastructure.Persistence;
+using MeetingRooms.Infrastructure.Persistence.Repositories;
 using MeetingRooms.Infrastructure.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -14,7 +15,7 @@ namespace MeetingRooms.Infrastructure;
 public static class DependencyInjectionExtensions
 {
     /// <summary>
-    /// Registers the database context, ASP.NET Core Identity and the unit of work.
+    /// Registers the database context, ASP.NET Core Identity, the unit of work and the repositories.
     /// </summary>
     public static IServiceCollection AddInfrastructurePersistence(
         this IServiceCollection services,
@@ -56,6 +57,9 @@ public static class DependencyInjectionExtensions
         services.AddOptions<SeedOptions>().Bind(configuration.GetSection(SeedOptions.SectionName));
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+        services.AddScoped<IRoomRepository, RoomRepository>();
+        services.AddScoped<ISlotRepository, SlotRepository>();
 
         return services;
     }
