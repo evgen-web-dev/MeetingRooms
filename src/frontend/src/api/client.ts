@@ -8,7 +8,10 @@
 interface ProblemDetailsBody {
   title?: string
   detail?: string
+  /** Business error codes - this API's extension member. */
   errorDetails?: string[]
+  /** Field-keyed messages, the shape [ApiController] produces for a validation failure. */
+  errors?: Record<string, string[]>
 }
 
 /**
@@ -61,10 +64,20 @@ async function failureOf(response: Response, authenticated: boolean): Promise<Ap
     const problem = (await response.json()) as ProblemDetailsBody
     const codes = problem.errorDetails ?? []
 
+    // A validation failure carries its messages under `errors`, keyed by field, and leaves
+    // `title` as the framework's generic sentence. Reading only `errorDetails` - which a
+    // validation failure does not carry - surfaced "One or more validation errors occurred." and
+    // threw away the half that says which field and why.
+    const validationMessages = Object.values(problem.errors ?? {}).flat()
+
     return new ApiError(
       response.status,
       codes,
-      codes.length > 0 ? codes.join(', ') : (problem.detail ?? problem.title ?? `HTTP ${response.status}`),
+      codes.length > 0
+        ? codes.join(', ')
+        : validationMessages.length > 0
+          ? validationMessages.join(' ')
+          : (problem.detail ?? problem.title ?? `HTTP ${response.status}`),
     )
   } catch {
     // 401 and 403 keep the framework's empty body by decision, so there is nothing to parse.

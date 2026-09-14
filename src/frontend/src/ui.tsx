@@ -67,6 +67,12 @@ export function describeError(error: unknown): string {
   if (error.is('RoomHasBookedSlots'))
     return 'This room has bookings, so it cannot be deleted. Bookings are never cancelled.'
 
+  // The password policy is Identity's, which reports it as one code per unmet rule - by decision,
+  // so the rules live in one place. Matched by prefix rather than by listing the six, so a policy
+  // change cannot reintroduce a raw code on screen.
+  if (error.codes.some((code) => code.startsWith('Password')))
+    return 'Password must be at least 6 characters and include an upper-case letter, a lower-case letter, a digit and a symbol.'
+
   if (error.status === 403) return 'You do not have access to that.'
 
   return error.message
