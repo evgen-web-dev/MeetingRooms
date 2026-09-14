@@ -117,6 +117,19 @@ public sealed class SlotRepository : ISlotRepository
             $"Slot {slotId} is unbooked and unexpired, yet the conditional update matched no row.");
     }
 
+    /// <remarks>
+    /// The projection is to <c>int?</c> rather than <c>int</c> on purpose, and it is a .NET trap
+    /// worth naming: <c>FirstOrDefaultAsync</c> over a value type returns <c>default</c> when no
+    /// row matches, so an <c>int</c> projection would report a missing slot as room <c>0</c>.
+    /// Nullable makes "no such slot" representable.
+    /// </remarks>
+    public async Task<int?> GetRoomIdAsync(int slotId, CancellationToken cancellationToken) =>
+        await _dbContext.Set<Slot>()
+            .AsNoTracking()
+            .Where(slot => slot.Id == slotId)
+            .Select(slot => (int?)slot.RoomId)
+            .FirstOrDefaultAsync(cancellationToken);
+
     public async Task<IReadOnlyList<Slot>> ListBookedForUserAsync(
         int userId,
         CancellationToken cancellationToken) =>
