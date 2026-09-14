@@ -46,7 +46,7 @@ public sealed class SlotRepository : ISlotRepository
     /// its own.
     /// </para>
     /// </remarks>
-    public async Task<SlotClaimOutcome> TryClaimAsync(
+    public async Task<(SlotClaimOutcome Outcome, DateTime? BookedAtUtc)> TryClaimAsync(
         int slotId,
         int userId,
         DateTime nowUtc,
@@ -66,20 +66,22 @@ public sealed class SlotRepository : ISlotRepository
 
         if (claimed == 1)
         {
-            return SlotClaimOutcome.Claimed;
+            // nowUtc arrives truncated to whole seconds, so this is exactly what the datetime2(0)
+            // column now holds - no read-back is needed to report it honestly.
+            return (SlotClaimOutcome.Claimed, nowUtc);
         }
 
-        // Failure path only, and it reads two columns rather than the row: this runs precisely
+        // Failure path only, and it reads three columns rather than the row: this runs precisely
         // when the slot is contended, so it should ask for as little as possible.
         var slot = await _dbContext.Set<Slot>()
             .AsNoTracking()
             .Where(slot => slot.Id == slotId)
-            .Select(slot => new { slot.BookedByUserId, slot.EndUtc })
+            .Select(slot => new { slot.BookedByUserId, slot.BookedAtUtc, slot.EndUtc })
             .FirstOrDefaultAsync(cancellationToken);
 
         if (slot is null)
         {
-            return SlotClaimOutcome.NotFound;
+            return (SlotClaimOutcome.NotFound, null);
         }
 
         // Ordered, because a slot can be both booked and expired and only one answer is useful.
@@ -88,17 +90,22 @@ public sealed class SlotRepository : ISlotRepository
         // refuses to accept.
         if (slot.BookedByUserId == userId)
         {
-            return SlotClaimOutcome.AlreadyClaimedByCaller;
+            // Both columns are written by the statement above and by nothing else, so a booker
+            // without a booking time is a broken invariant rather than a case to handle.
+            return (
+                SlotClaimOutcome.AlreadyClaimedByCaller,
+                slot.BookedAtUtc ?? throw new InvalidOperationException(
+                    $"Slot {slotId} has a booker but no booking time."));
         }
 
         if (slot.BookedByUserId is not null)
         {
-            return SlotClaimOutcome.AlreadyBooked;
+            return (SlotClaimOutcome.AlreadyBooked, null);
         }
 
         if (slot.EndUtc <= nowUtc)
         {
-            return SlotClaimOutcome.HasEnded;
+            return (SlotClaimOutcome.HasEnded, null);
         }
 
         // Unreachable, and provably so rather than optimistically: a booking is never removed,

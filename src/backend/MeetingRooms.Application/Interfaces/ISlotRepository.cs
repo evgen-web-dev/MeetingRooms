@@ -45,7 +45,14 @@ public interface ISlotRepository
     /// untruncated value could judge a slot ended up to half a second early - and would be echoed
     /// to the client that far from what is stored.
     /// </param>
-    Task<SlotClaimOutcome> TryClaimAsync(
+    /// <returns>
+    /// The outcome, and the booking time when the caller now holds the slot - set for
+    /// <see cref="SlotClaimOutcome.Claimed"/> and
+    /// <see cref="SlotClaimOutcome.AlreadyClaimedByCaller"/>, <c>null</c> otherwise. The second of
+    /// those is why it is here: a caller who already holds the slot must be told when they booked
+    /// it, not when they asked again.
+    /// </returns>
+    Task<(SlotClaimOutcome Outcome, DateTime? BookedAtUtc)> TryClaimAsync(
         int slotId,
         int userId,
         DateTime nowUtc,
