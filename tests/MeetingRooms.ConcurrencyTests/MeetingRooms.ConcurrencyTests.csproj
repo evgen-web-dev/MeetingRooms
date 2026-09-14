@@ -33,6 +33,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Read from the test binaries folder by BookingApiFactory, not from the API project's
+         content root - which is where a bare relative path would resolve. -->
+    <None Update="appsettings.Tests.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- The API project, for Program - which task 7 makes public. Application,
          Infrastructure and Domain arrive transitively, which is how the database
          assertions reach AppDbContext without a second reference to maintain. -->
