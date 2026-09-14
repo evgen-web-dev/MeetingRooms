@@ -80,10 +80,54 @@ firewall allows only GitHub, npm, NuGet and Anthropic:
 
 ## Running the concurrency test
 
-> **TODO (phase 5).** The automated test that fires simultaneous booking requests at one
-> slot and asserts exactly one booking is created. This section will carry the
-> `docker compose up` command for the SQL Server it runs against and the `dotnet test`
-> invocation, so a reviewer can run it with two commands.
+The test assignment #6 asks for is `tests/MeetingRooms.ConcurrencyTests`. It drives the **real
+application** over HTTP through `WebApplicationFactory` — real controllers, real EF Core, real
+Identity, real JWT — against a **real SQL Server**, and fires twenty simultaneous
+`POST /api/bookings` at one slot from twenty different accounts. An in-memory or SQLite provider
+would make the guarantee untestable, since it is the database's row lock that enforces it.
+
+Two commands, from the repository root:
+
+```bash
+docker compose up -d
+dotnet test tests/MeetingRooms.ConcurrencyTests
+```
+
+The first starts a throwaway SQL Server on `localhost:1433`. The second creates and migrates a
+`MeetingRooms_Tests` catalog on it, registers its own users and rooms, and runs the suite.
+`docker compose down` removes it again; nothing is persisted between runs.
+
+The tests never touch a development database — the host derives its connection string from
+whatever is configured and replaces only the catalog. That is not tidiness: bookings cannot be
+cancelled, so a run against the development database would permanently consume demo slots.
+
+> **Inside the dev container, skip the first command.** `ConnectionStrings__DefaultConnection`
+> already points at the `db` service and overrides the fallback in `appsettings.Tests.json`. The
+> container has no Docker CLI, so `docker-compose.yml` is written for a reviewer's host and has
+> been verified by inspection rather than by being run.
+
+**What the race asserts.** Exactly one request receives `201 Created`; the other nineteen receive
+`409 Conflict` carrying `SlotAlreadyBooked`; none receives a 5xx; and the database ends holding
+one booked row, whose booker is the caller who was told they won. It also asserts the requests
+genuinely overlapped — the last was issued before the first came back — because twenty *serial*
+requests produce an identical one-and-nineteen result and would otherwise pass for the wrong
+reason.
+
+Twenty distinct accounts rather than one caller repeating itself, because a caller who already
+holds a slot is answered `201` by design; twenty requests from one account would report twenty
+winners and prove nothing.
+
+**The mutation probe is what makes a green run mean something.** Delete
+`&& slot.BookedByUserId == null` from `SlotRepository.TryClaimAsync` and run the suite again: all
+twenty requests receive `201` and the test fails. Restore it and it passes. A test that cannot be
+shown to fail on a real defect is ceremony, so this is the phase's actual exit criterion rather
+than the green run.
+
+The same project also pins the slot lifecycle — a slot whose window has closed is refused, one
+still under way is bookable — and three assertions earlier phases could not reach until a booking
+could exist: that schedule instants reach the wire as UTC with a trailing `Z`, that `isBooked` and
+`isBookedByMe` are right on their true branch without disclosing who booked, and that deleting a
+room with a booked slot is refused with `409 RoomHasBookedSlots`.
 
 ## API reference
 
