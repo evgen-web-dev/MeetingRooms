@@ -497,16 +497,171 @@ On the deployed application:
 
 ## Done when
 
-- [ ] `Rooms` and `Slots` exist in Azure SQL with the unique index and the cascade.
-- [ ] Four demo rooms and a full 14-day grid per room, locally and deployed.
-- [ ] A room created through the API gets its own grid immediately, aligned with every other
+- [x] `Rooms` and `Slots` exist in Azure SQL with the unique index and the cascade.
+- [x] Four demo rooms and a full 14-day grid per room, locally and deployed.
+- [x] A room created through the API gets its own grid immediately, aligned with every other
       room's window.
-- [ ] A restart applies no migration, seeds no room and inserts no slot.
-- [ ] Admin-only endpoints answer 403 to a User token and succeed for an Admin token.
-- [ ] Deleting an unbooked room is a 204; the 409 path exists and gets its live proof in phase 5,
+- [x] A restart applies no migration, seeds no room and inserts no slot.
+- [x] Admin-only endpoints answer 403 to a User token and succeed for an Admin token.
+- [x] Deleting an unbooked room is a 204; the 409 path exists and gets its live proof in phase 5,
       when a booked slot can exist.
-- [ ] The schedule returns UTC instants plus `timeZoneId`, and honours an explicit range.
-- [ ] `dotnet build` zero warnings, `dotnet test` green.
-- [ ] Phase 2's and phase 3's surface unchanged.
-- [ ] `requirements.md`, `plan.md` and `decisions.md` no longer *specify* Stockholm; the
+- [x] The schedule returns UTC instants plus `timeZoneId`, and honours an explicit range.
+- [x] `dotnet build` zero warnings, `dotnet test` green.
+- [x] Phase 2's and phase 3's surface unchanged.
+- [x] `requirements.md`, `plan.md` and `decisions.md` no longer *specify* Stockholm; the
       only remaining mention is the amendment note recording what it was.
+
+*All ten closed 2026-09-14. One carries a qualifier: the 409 on deleting a booked room is
+proven at the repository level, against real SQL Server, but not yet through HTTP — nothing in
+the application can book a slot until phase 5, so the mapper row translating
+`RoomHasBookedSlots` into a 409 is the one link in that chain still unexercised end to end.*
+
+## Outcome
+
+**Completed and deployed 2026-09-14.** Every task done and every Done-when item closed. Fourteen
+planned commits became fifteen on the branch — the value-converter fix split out of task 12 —
+plus two unplanned ones on `develop` after the merge, both listed below.
+
+### Verified
+
+Locally, from the committed tree: `dotnet build` clean at **zero warnings** after every commit;
+`dotnet test` green at 17 tests, and shown to be load-bearing by two mutation probes rather than
+the one this document promised; `AddRoomsAndSlots` applied and listed; and the generated
+migration read line by line to confirm `datetime2(0)` on all three instants, `ON DELETE CASCADE`
+on the room foreign key, `NO ACTION` on the user foreign key, and a unique
+`(RoomId, StartUtc)`.
+
+Through the API on a local run, with both an administrator and an ordinary user: 401 without a
+token; **403 for a User on POST and DELETE**, which is the first role gate this application has
+ever enforced for real; 201 with a `Location` header and the created room reachable at it; 140
+slots carrying `timeZoneId: "Europe/Kyiv"`, running 05:00Z to 15:00Z — 08:00–18:00 Kyiv — with
+every `isBooked` and `isBookedByMe` false; explicit ranges honoured in **both** `...Z` and
+`...+03:00` forms; `toUtc` before `fromUtc` and a 30-day span each a 400 keyed to the field; an
+empty name with capacity 0 a `ValidationProblemDetails` keyed to both fields; an unknown room a
+404 `RoomNotFound`; `/api/rooms/abc` a 404 from the route constraint; PUT 200; DELETE 204; and
+the schedule of a deleted room 404.
+
+Idempotence across two starts: the first logged *"Seeded 4 demo rooms"* and *"Topped up the slot
+grid with 560 slot(s) across 4 room(s)"*; the second logged *"No migrations were applied"*, no
+seeding line at all, and *"Slot grid is already current for 4 room(s); inserted none"*.
+
+A full regression sweep of everything phases 2 and 3 built, re-run at the end rather than
+assumed: `/` serving the React page, `/scalar/`, `/openapi/v1.json`, the SPA fallback,
+`/api/nope` still a 404 `ProblemDetails` **with no `errorDetails`**, register → 201, a duplicate
+→ 409, login → 200, a wrong password → 401, `/me` 401 without a token and `["User"]` with one,
+the seeded administrator `["Admin"]`, and the hub negotiate still reporting in-process SignalR
+rather than Azure.
+
+One check beyond the list, because these are the first role-gated endpoints: the generated
+OpenAPI document declares the `Bearer` scheme, marks `POST /api/rooms` with it, and leaves
+`POST /api/auth/login` unsecured. Phase 3's transformer picked the new endpoints up with no
+change — worth confirming rather than assuming, since that phase recorded how a security scheme
+built without its host document serialises as `{}` and silently means "secured by nothing".
+
+On the deployed application, reported by the owner: it boots — which alone proves the time zone
+resolves on the App Service image, the one new startup dependency this phase adds — every
+previously existing endpoint still behaves, and every room endpoint works, including the
+auth-gated requests and the validation failures.
+
+### Deviations from the plan
+
+1. **Task 2 became two commits.** The zone amendment and the horizon amendment are separate
+   logical changes that both touch `requirements.md`; stacking them would have forced
+   interactive staging. The task table went from 14 entries to 15.
+2. **The last Done-when item was reworded** while making that change. It claimed `decisions.md`
+   would "no longer say Stockholm", but the amendment note deliberately still names the old zone,
+   so the item read false as written.
+3. **The test project was not created with `dotnet new xunit`.** That template pins **xunit
+   2.9.3** — v2 — confirmed by generating it into a scratch directory rather than trusting the
+   name. xUnit v3 needs the separate `xunit.v3.templates` package, whose `--test-runner` defaults
+   to `mtp-v2`; VSTest has to be requested explicitly and yields the `xunit.v3.mtp-off` variant.
+   The csproj was hand-written instead, borrowing the package set from the reference project.
+4. **Three packages from that set were dropped and one version corrected.** No `Moq` — `SlotGrid`
+   is a pure static function with nothing to mock; no `Shouldly` — xUnit's own `Assert` covers
+   every assertion here; no `coverlet.collector` — no coverage requirement in scope; and no
+   `xunit.runner.json`, whose reference copy contains only a `$schema` key and configures
+   nothing. `Microsoft.NET.Test.Sdk` was pinned at **17.14.1** rather than the reference csproj's
+   17.4.1, which is from 2022 and disagrees with that project's own handoff document.
+5. **`SlotsPerDay` is derived, not a declared constant.** The plan had `const int SlotsPerDay =
+   10`. Computing it from the three constants means they cannot silently disagree; the tests
+   still pin the value at 10.
+6. **`AppUser` did not gain a slot collection**, which phase 3's outcome anticipated. Nothing
+   queries a user *with* their slots — phase 5's "my bookings" queries `Slots` by foreign key —
+   so it would be a property that exists to be mapped and never read.
+7. **`Room.NameMaxLength` moved onto the entity** during task 12, out of the EF configuration.
+   The validator and the column both need that number, and two copies is how a column and the
+   rule guarding it drift apart.
+8. **Task 12 became two commits**: the endpoints, and then the value-converter fix the endpoints
+   exposed.
+9. **The `ExecuteDelete` risk was retired at task 10 rather than at task 13**, with a throwaway
+   probe against real SQL Server instead of waiting for the verification pass.
+10. **Two unplanned commits on `develop` after the merge:** a CI step running the unit tests
+    before publishing, and the rationale for having no pagination anywhere.
+
+### What the phase proved, beyond its checklist
+
+- **EF Core indexes every foreign key without being asked.** `IX_Slots_BookedByUserId` appears
+  in the generated migration having never been declared, so the index `docs/plan.md` lists for
+  "my bookings" needed no configuration line. Confirmed by reading the migration, not assumed.
+- **`ExecuteDelete` relies on the database's cascade, never EF's.** A probe deleted a room with
+  two slots and counted **zero** surviving slots, which is the `ON DELETE CASCADE` doing the
+  work; a relationship configured `ClientCascade` would have failed there on a foreign-key
+  violation instead.
+- **The conditional delete translates exactly as designed** — `DELETE FROM [r] WHERE [r].[Id] =
+  @roomId AND NOT EXISTS (...)` — and returns all three outcomes correctly against real SQL
+  Server.
+- **`SaveChanges` is atomic across the room and its grid**, even though they are separate
+  statements. Proved by forcing a unique-index violation on the second slot *after* the room's
+  insert had succeeded and its identity value had been issued: zero rooms and zero slots
+  survived.
+
+### Learned, and not anticipated by this document
+
+- **`datetime2` loses `DateTimeKind` on the way back, and that reaches the wire.** EF
+  materialises those columns as `Unspecified`. The instant is right and the label is gone, which
+  is invisible in C# — the two compare equal — and very visible in JSON: `System.Text.Json`
+  writes an `Unspecified` value with no trailing `Z`, so the schedule returned
+  `"2026-09-14T05:00:00"`. A browser parses that as **local** time and shifts every slot by the
+  viewer's offset. This is precisely `docs/plan.md`'s risk 7, "low probability, high
+  embarrassment", and it was found by reading a response rather than by any test.
+- **An expression tree may not contain a from-end index.** `windows[^1].StartUtc` inside an EF
+  `Where` is `CS8791`. The `^` operator is legal everywhere else in C#, so the failure is
+  surprising the first time: the same lambda syntax means "code to run" in one place and "data
+  describing code" in another, and only the second is restricted.
+- **A failed `SaveChanges` leaves the context dirty but the database clean.** EF reverts the
+  temporary key — `room.Id` was 0 again — and the entity stays `Added`, so that `DbContext` is
+  not reusable as though nothing happened. Harmless here, since it is scoped per request. SQL
+  Server's `IDENTITY` does not roll back either, leaving a gap in the sequence.
+- **Ukraine still observes EU daylight saving, according to tzdata 2026c.** Checked with a probe
+  before any assertion was written, because there has been live legislative movement on
+  abolishing it; had the zone data reflected that, four assertions would have been written wrong.
+- **A test can pass for the wrong reason and still look thorough.** The offset theory did not go
+  red when `DayEnd` was shortened, correctly — it asserts against `SlotGrid.DayEnd` on both
+  sides, so it pins the relationship rather than the value. The two hard-coded counts, 10 and
+  140, are the only things anchoring those constants. Worth knowing which assertions in a suite
+  are load-bearing and which are self-referential.
+
+### Carried into later phases
+
+- **Phase 5, three things.** The booking claim must decide the **retry-after-commit** case
+  deliberately: `EnableRetryOnFailure` replays an operation when a transient fault lands after
+  the commit but before the acknowledgement, and a replayed conditional `UPDATE` would find the
+  slot booked by its own winning write, match zero rows, and tell the winner 409. The invariant
+  holds; the response lies. Second, the `Z` regression has **no test** — the loss happens on the
+  round trip through SQL Server, so `WebApplicationFactory` against real SQL Server is the first
+  place it can be pinned, and a schedule response asserting its trailing `Z` belongs there.
+  Third, `dotnet test` now runs in CI, so the concurrency test will be picked up automatically
+  the moment its project exists: how CI gets a SQL Server, and whether a timing-sensitive test is
+  allowed to block a deploy on the day of a deadline, both need deciding at planning time rather
+  than at merge time.
+- **Phase 5 also inherits the bookings lists**, which are the genuinely unbounded reads in this
+  application and the place pagination is expected to earn its keep — see *API surface and
+  errors* in `docs/decisions.md`.
+- **Phase 7** needs no time-zone constant of its own: the schedule response carries
+  `timeZoneId`, which goes straight into `Intl.DateTimeFormat`. The grid is a day view over
+  `[fromUtc, toUtc)`, and the whole horizon is ~140 slots per room, so it can be fetched once and
+  grouped client-side rather than paged.
+- **Phase 8** must draw one distinction carefully in the README: the unique `(RoomId, StartUtc)`
+  index is seeder and top-up integrity **only** and plays no part in the no-double-booking
+  guarantee, which lives in one statement's `WHERE` clause. The two are easy to confuse and a
+  reviewer is likely to look straight at the index.
