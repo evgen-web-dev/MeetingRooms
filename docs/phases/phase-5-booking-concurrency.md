@@ -491,24 +491,156 @@ On the deployed application:
 
 ## Done when
 
-- [ ] Two simultaneous requests for one slot produce exactly one booking, proven by an automated
+- [x] Two simultaneous requests for one slot produce exactly one booking, proven by an automated
       test in the repository that a reviewer can run with two documented commands.
-- [ ] That test is shown to be load-bearing by a mutation probe, not merely green.
-- [ ] The winner gets 201, every loser gets 409 `SlotAlreadyBooked`, nobody gets a 5xx, and the
+- [x] That test is shown to be load-bearing by a mutation probe, not merely green.
+- [x] The winner gets 201, every loser gets 409 `SlotAlreadyBooked`, nobody gets a 5xx, and the
       database holds one booked row.
-- [ ] A caller who books the same slot twice gets 201 both times, and the stored `BookedAtUtc`
+- [x] A caller who books the same slot twice gets 201 both times, and the stored `BookedAtUtc`
       does not move.
-- [ ] A slot that has ended is refused with 409 `SlotHasEnded`; a slot still running is bookable.
-- [ ] `GET /api/bookings/me` and the admin `GET /api/bookings` work, and the admin one is the only
+- [x] A slot that has ended is refused with 409 `SlotHasEnded`; a slot still running is bookable.
+- [x] `GET /api/bookings/me` and the admin `GET /api/bookings` work, and the admin one is the only
       place a booker's identity appears.
-- [ ] The schedule's `isBooked` and `isBookedByMe` are proven on their **true** branch.
-- [ ] A schedule response's instants carry a trailing `Z`, pinned by a test.
-- [ ] Deleting a room with a booked slot returns 409 through HTTP.
-- [ ] `dotnet build` zero warnings; both test projects green; CI runs the unit project and the
+- [x] The schedule's `isBooked` and `isBookedByMe` are proven on their **true** branch.
+- [x] A schedule response's instants carry a trailing `Z`, pinned by a test.
+- [x] Deleting a room with a booked slot returns 409 through HTTP.
+- [x] `dotnet build` zero warnings; both test projects green; CI runs the unit project and the
       deploy still succeeds.
-- [ ] `docs/decisions.md` carries all nine decisions and no longer lists retry-after-commit as
+- [x] `docs/decisions.md` carries all nine decisions and no longer lists retry-after-commit as
       open.
+
+*All eleven closed 2026-09-14.*
 
 ## Outcome
 
-*Written after the deploy, as the branch's last commit.*
+**Completed and deployed 2026-09-14.** Every task done and every Done-when item closed. Thirteen
+planned pre-merge tasks became fifteen commits: task 4 split when writing the service exposed a gap
+in the port it had just committed, and task 13 split because correcting a claim in `docs/plan.md` is
+a different change from recording a decision.
+
+### Verified
+
+Locally, from the committed tree: `dotnet build` clean at **zero warnings** after every commit;
+**17 unit tests** and **6 concurrency tests** green; and the generated SQL read out of EF's command
+log rather than assumed — one `UPDATE` carrying all three predicates with no `SELECT` ahead of it,
+and a failure read of `SELECT TOP(1) [BookedByUserId], [BookedAtUtc], [EndUtc]`.
+
+**Five probes**, four of which reddened something and one of which corrected a comment:
+
+| probe | result |
+|---|---|
+| delete `&& slot.BookedByUserId == null` | all twenty requests get 201; the race test fails |
+| delete `&& slot.EndUtc > nowUtc` | the expired-slot test fails |
+| stagger the racing requests 50 ms apart | the overlap assertion fails |
+| delete the UTC value converter | the trailing-`Z` test fails |
+| delete `RunContinuationsAsynchronously` | **nothing fails** — see *Learned* below |
+
+Each of the first four reddened **exactly one** test and left the other five green, which also
+shows the tests are not coupled to each other.
+
+Through the API on a local run, thirteen assertions over every booking endpoint: a free slot books
+(201); the same slot from the same caller books again (201, `bookedAtUtc` **unmoved**); a second
+caller gets 409 `SlotAlreadyBooked`; an unknown id 404; `slotId: 0` a 400 keyed to the field; no
+token a 401 with an empty body; `GET /api/bookings/me` showing one booking for the booker and none
+for anyone else; `GET /api/bookings` 403 for a User and 200 with `bookedByEmail` for an
+administrator; the schedule reporting `isBookedByMe` true for the booker and false for another
+caller looking at the same booked slot; and deleting that room refused with 409
+`RoomHasBookedSlots`.
+
+**On the repository owner's machine, by the reviewer's own path:** `docker compose up -d` followed
+by `dotnet test tests/MeetingRooms.ConcurrencyTests`, with no environment variable set, from a
+catalog that did not exist. Six of six green in 7.9 seconds — versus ~0.4 in the dev container,
+the difference being a cold create-migrate-seed plus SQL Server running under amd64 emulation on
+Apple silicon.
+
+On the deployed application: booking works for an administrator and for an ordinary user; an
+administrator sees all bookings and their own, an ordinary user only their own; a second caller on
+somebody else's slot gets 409; and re-booking one's own slot returns 201. **This is the first time
+the mechanism has run against Azure SQL, which enables RCSI by default** — the isolation setting
+the design was reasoned against and the one the local SQL Server does not reproduce.
+
+### Deviations from the plan
+
+1. **The `ISlotRepository` additions moved from task 3 to task 4.** Three method signatures without
+   their implementation is `CS0535`, which breaks this document's own "the tree builds after every
+   commit" rule. A port and its implementation are one logical change anyway.
+2. **Task 4 became two commits.** Writing `BookingService` exposed that the outcome enum alone
+   cannot answer honestly on the idempotent path — the service could only echo the current
+   request's clock. The follow-up returns the stored booking time alongside the outcome.
+3. **A result type was written and then removed.** `SlotClaimResult`, a `readonly record struct`
+   with three factories, became a named tuple after the owner asked whether it was necessary. It
+   was not: a positional record struct has a **public** primary constructor and `default()` bypasses
+   any constructor regardless, so its factories could not enforce the pairing they appeared to
+   guard, and it carried no behaviour. `RoomService.ResolveRange` was the precedent already in the
+   tree.
+4. **Task 13 became two commits**, separating the decisions from the correction to `docs/plan.md`.
+5. **The CI step also gained a solution-wide `dotnet build`.** The plan only narrowed the test run,
+   which would have let a compile break in the concurrency project reach the publish step
+   unnoticed — including in the one artifact the assignment is graded on.
+6. **Tests that book use a room of their own**, not the shared race room. Bookings cannot be
+   undone, so shared state would mean tests consuming each other's slots.
+7. **The overlap assertion is not in the plan at all.** It is the largest single addition, and the
+   reason is under *What the phase proved*.
+
+### What the phase proved, beyond its checklist
+
+- **A green concurrency test does not establish that the requests overlapped — and neither does the
+  mutation probe.** Twenty *serial* requests produce exactly the same one-201-and-nineteen-409s as
+  a real race, and with the free-slot predicate removed every `UPDATE` matches whatever the
+  ordering, so the probe reddens identically either way. `docs/plan.md` risk 2 named "requests do
+  not overlap" as the failure mode and then proposed a mitigation that cannot detect it. The test
+  now measures it directly: the last request was issued before the first came back, so all twenty
+  were in flight at one instant. The risk entry was corrected rather than left standing.
+- **The overlap held on a slower database too.** The owner's run was against emulated amd64 SQL
+  Server, which widens the window in which requests can interleave badly. That is stronger evidence
+  than the fast local run, not weaker.
+- **`ExecuteUpdateAsync` translates exactly as designed**, confirmed by reading EF's command log
+  against real SQL Server before any test depended on it.
+- **The trailing-`Z` regression is now pinned**, retroactively covering a fix phase 4 shipped with
+  no test because the `DateTimeKind` loss only happens on the round trip through SQL Server.
+
+### Learned, and not anticipated by this document
+
+- **A design decision reached into test design, and would have been found the expensive way.**
+  Answering a caller who already holds the slot with 201 means N requests from *one* account report
+  N winners. The mandated test needs N **distinct** users, and discovering that while debugging a
+  red test would have invited exactly the wrong fix.
+- **`RunContinuationsAsynchronously` does not serialise the waiters.** Removing it changed nothing,
+  because each continuation runs inline only until its HTTP call suspends, after which the
+  releasing thread moves to the next. A comment asserting the opposite had already been written;
+  it was corrected rather than left to mislead the next reader.
+- **`datetime2(0)` rounds the *parameter*, not only the stored value.** The parameter inherits the
+  column's type, so an untruncated `nowUtc` would judge a slot ended up to half a second early —
+  which makes the truncation in `BookingService` load-bearing rather than cosmetic.
+- **A record struct cannot enforce its own invariants.** `default(T)` bypasses every constructor,
+  and a positional one's primary constructor is public anyway. Worth knowing before reaching for
+  the shape `OperationResult` uses, which is a class and genuinely can refuse to construct itself
+  inconsistently.
+- **xUnit v3 captures `Console` output**, so a diagnostic probe has to write to a file or take
+  `ITestOutputHelper`. An empty v3 test project also builds without `CS5001` — the generated entry
+  point arrives before any test does.
+
+### Carried into later phases
+
+- **Phase 6 must broadcast on `Claimed` only, never on `AlreadyClaimedByCaller`.** Both are a
+  successful `OperationResult`, so the obvious implementation — broadcast whenever the booking
+  succeeded — emits a slot-booked event every time a caller re-posts a booking they already hold,
+  when nothing has changed. The outcome that distinguishes them does not currently reach the
+  service's return value; carrying it up, or broadcasting from the repository's success branch, is
+  a decision phase 6 has to make deliberately.
+- **Phase 7 inherits a slot state with no flag.** A slot whose window has closed is
+  `isBooked: false` and yet unbookable. That is deliberate — the client has `endUtc` and its own
+  clock, and a server-computed flag would be stale on serialisation — so the grid must grey those
+  out itself rather than expecting the API to say so.
+- **Phase 8's README** must draw the distinction phase 4 flagged (the unique `(RoomId, StartUtc)`
+  index is seeder integrity only and plays no part in the guarantee) and should also name the two
+  things a reviewer is most likely to question: that a repeat booking answers 201, and why the
+  overlap assertion exists.
+- **Housekeeping:** a `MeetingRooms_Smoke` catalog was left on the dev container's SQL Server by
+  the local HTTP pass, alongside `MeetingRooms_Tests`. Neither is the development database and
+  both are safe to drop.
+- **Every deploy is unavailable for roughly ten seconds**, observed on this one. It is the App
+  Service restart plus a cold start, not this phase — which adds no migration at all. The startup
+  block runs before `app.Run()`, deliberately, so a restart presents as unavailable rather than as
+  serving requests against a schema that may not exist yet. `SlotGridTopUp` reads every slot in the
+  current window on each start, rooms × 140 rows, and is the part that would grow.
