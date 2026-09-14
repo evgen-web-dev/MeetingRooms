@@ -113,6 +113,26 @@ stays authoritative: if an entry here conflicts with it, the assignment wins.
   record; the client needs to know how to render, and a constant held in both the generator
   and the formatter is how the two drift apart. Not a per-slot UTC offset either — that is
   derived data that changes at a DST boundary and can disagree with itself.
+- **Nothing is paginated. The schedule is *bounded*, which is a different claim from
+  *deferred*.** A schedule response is at most 140 items — ten slots a day across a
+  fourteen-day horizon, with the validator capping an explicit range at the same fourteen
+  days — so on the order of 15KB of JSON before compression, and a ceiling that cannot grow
+  with use. Pagination protects against unbounded growth, and there is none here. The
+  endpoint also already carries the paging primitive its domain actually uses:
+  `fromUtc`/`toUtc`. A client rendering one day asks for one day and receives ten slots,
+  whereas "page 3" of a calendar means nothing to anyone — slots are addressed by time, not
+  by index.
+
+  > *The honest weak spot, worth volunteering rather than waiting to be asked:*
+  > `GET /api/rooms` has **no** structural bound — nothing stops an administrator creating
+  > ten thousand rooms. It is fine at four, and it is the endpoint that would take paging
+  > first if the room count ever justified it. Phase 5's "my bookings" and admin
+  > all-bookings lists are the genuinely unbounded ones: they grow monotonically with use
+  > and have no natural window, so that is where pagination is expected to earn its place.
+  > The reference project's four-type pattern — `PaginatedRequest`, `PageQueryParams`,
+  > `PagedResult`, `PaginatedResponse` — is worth borrowing there, along with its two
+  > cautions: count on the unpaged query first, and `OrderBy` before `Skip`/`Take` or the
+  > page is non-deterministic.
 
 ## Validation
 
