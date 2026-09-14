@@ -571,12 +571,61 @@ This is the assignment's core; the full reasoning is in `docs/plan.md`.
 - **The phase 6 live panel is scaffolding, and phase 7 deletes it.** It holds its token in
   component state rather than `localStorage`: the decision above belongs to phase 7's auth context,
   and a throwaway probe should not be the first thing to implement a standing decision.
+
+  > *Done in phase 7, with one part kept.* The live panel is gone. The **health and negotiate
+  > panels** are not: they moved to a `/diagnostics` page behind the auth guard, because on a
+  > single instance the in-process fallback behaves identically to Azure SignalR, so no amount of
+  > working real-time distinguishes them and negotiate is the only thing that does. Behind the
+  > guard because securing the hub means the transport diagnosis now needs a token.
 - **A SignalR client handler must not return a value.** TypeScript permits returning one where
   `void` is expected, and the client reads any returned value as a result for an invocation —
   logging `Result given for 'slotbooked' method but server is not expecting a result`.
   `scheduleConnection.ts` therefore wraps the caller's handler in a block, so the class of bug is
   removed rather than avoided by convention. Found by running a client whose handler was a one-line
   arrow.
+- **`react-router` 8.3.1, in declarative mode**, closing the routing question this file carried
+  under *Still open*. Real URLs rather than a screen held in state: the API has served
+  `index.html` for an unmatched route since phase 1 (`MapFallbackToFile`), so a reviewer can link
+  straight to a room's schedule and a hard refresh lands on the same page. `<BrowserRouter>` with
+  nested `<Route>` elements rather than `createBrowserRouter` and loaders — the data-router's
+  loaders exist to move fetching out of components, which is a trade worth making in an
+  application with more than seven screens. It resolved to exactly two packages, `react-router`
+  and `cookie-es`, and cost ~54 kB raw on the bundle (282 → 336 kB).
+- **The guards are route elements wrapping nested routes**, `RequireAuth` and `RequireAdmin`, not
+  a check inside each page. A new screen is then protected by where it is declared rather than by
+  someone remembering. Neither is a security boundary and neither pretends to be: every endpoint
+  behind them is gated server-side, and an admin route reached by typing its URL would still be
+  answered 403.
+- **A room's schedule is fetched whole and paged by day in memory.** Asking the server for one day
+  means computing where a day begins in `Europe/Kyiv` **in the browser**, which is the trap
+  recorded under *API surface and errors*: a bound sent without an offset is interpreted in the
+  server's own zone, and getting it wrong is an off-by-one-hour that appears only across a
+  daylight-saving boundary. The response is bounded at ~140 slots by construction, so one fetch
+  costs ~15 KB and removes that arithmetic entirely — it also makes a live update a single array
+  edit and the reconnect refetch one call. Grouping uses `Intl.DateTimeFormat('en-CA', …)`, whose
+  short date format is already ISO-ordered and therefore sortable without assembling parts by hand.
+- **One hub connection per session, joining and leaving room groups**, closing what phase 6 carried
+  forward. The probe opened a fresh connection per room, which under Azure SignalR is a negotiate
+  plus a new handshake to the service on every switch, and left `UnsubscribeFromRoom` called by
+  nothing. Verified by a throwaway client rather than by reading: after switching rooms on one
+  connection, a booking in the room just left is **not** delivered — which is the half a browser
+  check cannot show, since a screen that stopped updating looks the same as a room with no activity.
+- **Roles come from `GET /api/auth/me`, not from decoding the token.** No base64 parser in the
+  client, and it puts the endpoint built as a claim-type diagnostic on the path every session takes.
+  The cost is one request per session start, against a token that is already in hand.
+- **A 401 on a call that carried a token ends the session.** There are no refresh tokens by
+  decision, so there is nothing to retry: the only correct answer is to clear the stored token and
+  return to the login screen. A 401 from *login itself* is left alone — it is a wrong password, not
+  an expired session — which is why the rule is about calls that carried a token.
+- **The access token is module state in the API client, written by the auth context and by nothing
+  else.** The alternative, which phase 6's probe used, puts the credential in the signature of
+  every function that touches the API.
+- **Registration logs in with the same credentials immediately.** The API issues no token on
+  registration by decision, and creating a second account is exactly what a reviewer does to watch a
+  booking arrive in another browser; making them type the password twice buys nothing.
+- **Business error codes are translated to sentences in one place**, and an unmapped code falls
+  through to the code itself rather than to a generic apology. An unfamiliar code on screen is a
+  bug report; "something went wrong" is not.
 
 ## Testing
 
@@ -740,7 +789,6 @@ Previously open, now closed:
 
 ## Still open
 
-- Frontend routing structure and screen breakdown — deliberately deferred to phase 7.
 - The exact `dotnet ef database update` invocation for the post-phase-3 migration
   flip; a ten-minute detail, not a design decision.
 
@@ -752,3 +800,8 @@ not unique (see *Persistence*).
 the reasoning and for what it forces on the mandated test. Also closed: whether the bookings lists
 are paginated (they are not — see *API surface and errors*) and how CI relates to a test that needs
 a real SQL Server (it does not run it — see *Testing*).
+
+*Closed by phase 7:* the frontend's routing structure and screen breakdown — react-router in
+declarative mode, guards as route elements, and the seven screens `docs/requirements.md` §1 asks
+for (see *Frontend*). The only item still open is the migration flip's exact invocation, which is
+deferred by choice rather than undecided.
