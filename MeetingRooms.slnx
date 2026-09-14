@@ -6,4 +6,7 @@
     <Project Path="src/backend/MeetingRooms.Domain/MeetingRooms.Domain.csproj" />
     <Project Path="src/backend/MeetingRooms.Infrastructure/MeetingRooms.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MeetingRooms.UnitTests/MeetingRooms.UnitTests.csproj" />
+  </Folder>
 </Solution>
