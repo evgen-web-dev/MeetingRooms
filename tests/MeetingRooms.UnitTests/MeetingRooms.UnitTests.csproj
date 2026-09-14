@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\backend\MeetingRooms.Domain\MeetingRooms.Domain.csproj" />
+    <ProjectReference Include="..\..\src\backend\MeetingRooms.Application\MeetingRooms.Application.csproj" />
   </ItemGroup>
 
 </Project>

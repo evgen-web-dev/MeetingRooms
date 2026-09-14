@@ -11,11 +11,16 @@ namespace MeetingRooms.Application.Services;
 public sealed class BookingService : IBookingService
 {
     private readonly ISlotRepository _slotRepository;
+    private readonly IScheduleNotifier _scheduleNotifier;
     private readonly TimeProvider _timeProvider;
 
-    public BookingService(ISlotRepository slotRepository, TimeProvider timeProvider)
+    public BookingService(
+        ISlotRepository slotRepository,
+        IScheduleNotifier scheduleNotifier,
+        TimeProvider timeProvider)
     {
         _slotRepository = slotRepository;
+        _scheduleNotifier = scheduleNotifier;
         _timeProvider = timeProvider;
     }
 
@@ -35,6 +40,25 @@ public sealed class BookingService : IBookingService
 
         var (outcome, bookedAtUtc) =
             await _slotRepository.TryClaimAsync(request.SlotId, callerUserId, nowUtc, cancellationToken);
+
+        // Claimed alone, never AlreadyClaimedByCaller. Both are a successful result, which is
+        // exactly why "announce whenever the booking succeeded" is the wrong reading: a caller
+        // re-posting a booking they already hold changed nothing, and announcing it would tell
+        // every viewer of the room that something happened when the row stood still.
+        if (outcome is SlotClaimOutcome.Claimed)
+        {
+            var roomId = await _slotRepository.GetRoomIdAsync(request.SlotId, cancellationToken);
+
+            // Unreachable in practice - the claim just succeeded, and a room holding a booked slot
+            // cannot be deleted - and skipped rather than thrown anyway. This is the one place the
+            // codebase's usual "broken invariant is a 500" rule would be wrong: the booking is
+            // committed and cannot be undone, so throwing here would answer the one caller who did
+            // get the room by telling them they did not.
+            if (roomId is not null)
+            {
+                await _scheduleNotifier.SlotBookedAsync(roomId.Value, request.SlotId);
+            }
+        }
 
         return outcome switch
         {

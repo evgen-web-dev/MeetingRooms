@@ -1,7 +1,10 @@
+using System.Text.Json;
 using FluentValidation;
 using MeetingRooms.Api.Errors;
 using MeetingRooms.Api.ExceptionHandlers;
+using MeetingRooms.Api.Realtime;
 using MeetingRooms.Application.Auth;
+using MeetingRooms.Application.Interfaces;
 using MeetingRooms.Application.Options;
 using MeetingRooms.Application.Results;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -44,6 +47,16 @@ public static class DependencyInjectionExtensions
 
         var signalRBuilder = services.AddSignalR();
 
+        // Pinned rather than inherited. SignalR's JSON protocol is configured independently of
+        // MVC's, so the camelCase that every REST response uses does not carry over by
+        // construction - it is a separate default that happens to agree. Measured, not assumed:
+        // with this call removed the hub still emits { roomId, slotId }, so this is a pin against
+        // the two defaults ever diverging rather than a fix for a live defect. Kept because the
+        // failure it prevents is silent and runtime-only - `SlotId` arriving where the browser
+        // reads `slotId`, with nothing failing on the server.
+        signalRBuilder.AddJsonProtocol(options =>
+            options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
+
         // The key AddAzureSignalR() reads by default. In Azure it arrives as the app
         // setting Azure__SignalR__ConnectionString.
         var azureSignalRConnectionString = configuration["Azure:SignalR:ConnectionString"];
@@ -52,6 +65,12 @@ public static class DependencyInjectionExtensions
         {
             signalRBuilder.AddAzureSignalR();
         }
+
+        // The adapter behind Application's IScheduleNotifier port, registered by the layer that
+        // implements it. Singleton: it holds no state, and the IHubContext it wraps is one too.
+        // BookingService is scoped and will depend on it, which is fine - a scoped service may
+        // resolve a singleton; only the reverse is a lifetime bug.
+        services.AddSingleton<IScheduleNotifier, SignalRScheduleNotifier>();
 
         return services;
     }
@@ -126,6 +145,39 @@ public static class DependencyInjectionExtensions
                     throw new InvalidOperationException(
                         $"{JwtOptions.SectionName}:{nameof(JwtOptions.SigningKey)} is unusable.");
                 }
+
+                // How the token arrives, as opposed to how it is validated. A browser cannot set
+                // headers on a WebSocket handshake - the WebSocket API has no such option - so the
+                // SignalR client appends the token to the query string instead, and this is
+                // ASP.NET Core's documented answer to that.
+                //
+                // Scoped to /hubs on purpose. A query string is the worst place to carry a
+                // credential: it reaches server and proxy access logs, which a header does not.
+                // Confining it to the hub paths means the REST API never accepts one, so the
+                // exposure is one route rather than the whole surface. It is inside TLS on the
+                // wire, and it reaches no browser history and no Referer header, because this URL
+                // is opened by a script rather than navigated to.
+                //
+                // On the deployed app this path is rarer than it looks: under Azure SignalR the
+                // socket terminates at the service, so the browser carries the *service's* token
+                // there and this application's JWT travels on the negotiate request, as an
+                // ordinary Authorization header. This is what the in-process fallback uses, and
+                // what a downgrade to Server-Sent Events would use. See docs/decisions.md.
+                bearerOptions.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        var accessToken = context.Request.Query["access_token"];
+
+                        if (!string.IsNullOrEmpty(accessToken)
+                            && context.Request.Path.StartsWithSegments("/hubs"))
+                        {
+                            context.Token = accessToken;
+                        }
+
+                        return Task.CompletedTask;
+                    }
+                };
 
                 // Without this, the legacy JWT to WS-Federation map rewrites "sub" and "role"
                 // into URI claim types on the way in, so the claims read back are not the
