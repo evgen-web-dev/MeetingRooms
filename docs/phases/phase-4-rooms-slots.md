@@ -508,4 +508,5 @@ On the deployed application:
 - [ ] The schedule returns UTC instants plus `timeZoneId`, and honours an explicit range.
 - [ ] `dotnet build` zero warnings, `dotnet test` green.
 - [ ] Phase 2's and phase 3's surface unchanged.
-- [ ] `requirements.md`, `plan.md` and `decisions.md` no longer say Stockholm.
+- [ ] `requirements.md`, `plan.md` and `decisions.md` no longer *specify* Stockholm; the
+      only remaining mention is the amendment note recording what it was.
